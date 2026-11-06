@@ -2,7 +2,7 @@
 
 A multi-omics ranking platform for cancer cell line selection, developed as part of an MSc dissertation project at the University of Bristol in collaboration with AstraZeneca.
 
-Researchers specify target genes with desired expression directions, and the system ranks ~2,200 DepMap cell lines by integrating RNA expression (DepMap, HPA, GEO), proteomics, mutation/fusion annotations, metabolomics, and miRNA data through a Reciprocal Rank Fusion (RRF) ensemble scoring method.
+Researchers specify target genes with desired expression directions, and the system ranks ~2,200 DepMap cell lines by integrating RNA expression (DepMap, HPA), proteomics, mutation/fusion annotations, metabolomics, and miRNA data. RNA and protein are scored by how far each cell line sits above the rest (robust z-score), and several genes are combined with a weighted geometric mean (see [Scoring (current)](#scoring-current)).
 
 **Live site:** [https://celllinefinder.com](https://celllinefinder.com)
 
@@ -11,7 +11,8 @@ Researchers specify target genes with desired expression directions, and the sys
 ## Features
 
 - **Multi-gene search** with per-gene high/low expression direction toggles
-- **RRF ensemble ranking**: combining z-score and percentile ranks across three RNA sources and proteomics
+- **Magnitude-based ranking**: robust z-score of one RNA consensus (DepMap + HPA) and of protein, combined across genes with a weighted geometric mean
+- **GEO support**: per-study check shown in the detail panel (does not change score or rank)
 - **Flexible filtering**: hard-filter or soft-boost by disease/lineage/subtype, mutation/fusion include/exclude, MSI/CIN instability thresholds, metabolite and miRNA exclusion
 - **Assay compatibility warnings** (Q7) for adherent screens, 3D spheroids, and suspension assays
 - **Cosine similarity**: find the five most similar cell lines by expression profile
@@ -19,6 +20,45 @@ Researchers specify target genes with desired expression directions, and the sys
 - **CSV export** of ranked results with full query metadata
 - **LLM-powered chatbot**: (GPT-4o-mini) for in-app data questions
 - **In-app documentation**: covering usage, data sources, methodology, and project information
+
+---
+
+## Scoring (current)
+
+Base case: one or more genes, each with a direction (HIGH or LOW).
+
+1. **RNA**: DepMap and HPA are each converted to log2(TPM+1) and standardised per gene with a robust z-score, `(x - median) / (1.4826 * MAD)`. The two sources are averaged into one RNA consensus. If MAD = 0 the standard deviation is used instead and the result is flagged with a warning. The difference between the two sources is kept as a QC value only.
+2. **Protein**: the same robust z-score.
+3. **Score (0 to 1)**: `asinh(z)` scaled to 0 to 1. RNA and protein are combined 0.7 / 0.3 (RNA only is capped at 0.7).
+4. **Several genes**: each gene gives a 0 to 1 score (LOW genes are flipped: `1 - score`). They are combined with a weighted geometric mean `exp( sum(w * log(D + eps)) / sum(w) )`, `eps = 0.000001`, equal weights by default. A cell line with no data for a gene is scored on the other genes and flagged.
+5. **GEO** is never pooled. The detail panel shows support per study (studies with at least 10 samples, |z| >= 1). It does not change score or rank.
+
+The older methods (`rrf`, `zscore`, `percentile`, and summed RRF for several genes) can still be selected with the API fields `scoring_method` and `multi_gene_method`.
+
+Check the multi-gene rule against 6 scenarios (no database needed): `python backend_api/compare_multigene.py`
+
+---
+
+## Development status
+
+Scope so far: gene + direction only. The mutation, fusion, MSI/CIN, metabolite and miRNA filters, similarity and chatbot were not touched.
+
+| # | Priority from advisor feedback | Status |
+|---|---|---|
+| 1 | Remove pooled GEO | Done |
+| 2 | Collapse RNA provenance (one RNA consensus) | Done |
+| 3 | Preserve magnitude (robust z, log2) | Done |
+| - | GEO support card | Done |
+| 4 | Weighted geometric mean for several genes | Done |
+| 5 | Detectable low expression | Not started |
+| 6 | Separate coverage | Not started |
+| 7 | Weight sensitivity | Not started |
+| 8 | Rename confidence | Not started |
+| 9 | Context + validation | Not started |
+
+**Decisions not yet confirmed with the advisor:** asinh + min-max to map z to 0 to 1; protein also uses robust z; SD fallback when MAD = 0; GEO thresholds (at least 10 samples, |z| >= 1, majority rule); skip a gene with no data and renormalise the weights; `eps = 0.000001`.
+
+**Not yet checked on real data:** web results after the switch to log2 (for example EGFR); genes with MAD = 0, especially LOW searches where many cell lines tie; old vs new top 20 for several real genes.
 
 ---
 
@@ -39,7 +79,7 @@ celllinefinder/
 │   │   │   ├── filters.py     # /api/filters — disease/lineage/subtype values
 │   │   │   └── chat.py        # /api/chat — LLM chatbot endpoint
 │   │   └── services/
-│   │       ├── ranking_service.py     # RRF scoring, z-score, percentile logic
+│   │       ├── ranking_service.py     # robust z scoring, geometric mean for several genes, legacy RRF
 │   │       ├── data_service.py        # SQL queries via DuckDB
 │   │       ├── similarity_service.py  # Cosine similarity across expression profiles
 │   │       ├── q6_lineage_scorer.py   # Tissue-match soft boost scoring
@@ -94,8 +134,8 @@ celllinefinder/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/NattawasP/SEMTM0044_2025_AYEAR_TEAM34.git
-cd SEMTM0044_2025_AYEAR_TEAM34
+git clone https://github.com/mewpattanun/AZ_revise_ranking.git
+cd AZ_revise_ranking
 ```
 
 ### 2. Download the data
@@ -115,6 +155,8 @@ Alternatively, if you have the harmonized CSVs in `harmonized_data/`, you can re
 ```bash
 python data_prepare/csv_to_parquet.py --input harmonized_data
 ```
+
+`data_prepare/data/dim_geo_samples.parquet` (GSM to GSE study map, small) is committed in this repo, so nothing extra is needed for the GEO support card. To rebuild it from the raw GEO info file: `python data_prepare/build_geo_study_map.py <path to 10_GEOInfo.txt>`. Without it the app still works; only the GEO support card is missing.
 
 ### 3. Backend setup
 
@@ -184,6 +226,7 @@ The pipeline transforms 14 raw datasets into query-ready Parquet files in three 
 | fact_expression_depmap | fact_expression_depmap.parquet | ~80M |
 | fact_expression_hpa | fact_expression_hpa.parquet | ~24M |
 | fact_expression_geo | fact_expression_geo.parquet | ~65M |
+| dim_geo_samples | dim_geo_samples.parquet | ~2.3K |
 | fact_proteomics | fact_proteomics.parquet | ~4.7M |
 | fact_mutations | fact_mutations.parquet | ~193K |
 | fact_fusions | fact_fusions.parquet | ~25K |
