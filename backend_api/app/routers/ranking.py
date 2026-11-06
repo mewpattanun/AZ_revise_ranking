@@ -23,6 +23,7 @@ def rank_cell_lines(req: RankRequest):
             "hugo": gene["hugo_symbol"],
             "ensembl_id": gene["ensembl_id"],
             "direction": gt.direction,
+            "weight": gt.weight,
         })
 
     results = ranking_service.run_ranking(
@@ -49,11 +50,12 @@ def rank_cell_lines(req: RankRequest):
         scoring_method=req.scoring_method,
         sources=req.sources,
         assay_type=req.assay_type,
+        multi_gene_method=req.multi_gene_method,
     )
 
     return RankResponse(
         query={
-            "genes": [{"hugo": g["hugo"], "direction": g["direction"]} for g in resolved_genes],
+            "genes": [{"hugo": g["hugo"], "direction": g["direction"], "weight": g["weight"]} for g in resolved_genes],
             "w_rna": req.w_rna,
             "w_protein": req.w_protein,
             "mutation_mode": req.mutation_mode,
@@ -74,6 +76,7 @@ def rank_cell_lines(req: RankRequest):
             "core_only": req.core_only,
             "top_n": req.top_n,
             "scoring_method": req.scoring_method,
+            "multi_gene_method": req.multi_gene_method,
             "sources": req.sources,
             "assay_type": req.assay_type,
         },

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { getCellLineEvidence, getSimilarCellLines } from "../../api";
 import styles from "./DetailPanel.module.css";
 
-export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "rrf", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose }) {
+export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [similar, setSimilar] = useState(null);
@@ -123,15 +123,17 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                       <div className={styles.geneCardRank}>No expression data</div>
                     )}
                     <div className={styles.geneCardSub}>
-                      {scoringMethod === "rrf"
-                        ? `RRF ensemble across ${gd.source_count} source${gd.source_count !== 1 ? "s" : ""} × 2 methods`
+                      {scoringMethod === "robust_z"
+                        ? `Score from the size of one RNA consensus robust z (${gd.source_count} source${gd.source_count !== 1 ? "s" : ""})`
+                        : scoringMethod === "rrf"
+                        ? `RRF ensemble (Z-Score + Percentile) on one RNA consensus from ${gd.source_count} source${gd.source_count !== 1 ? "s" : ""}`
                         : scoringMethod === "zscore"
-                        ? `Z-Score ranking across ${gd.source_count} source${gd.source_count !== 1 ? "s" : ""}`
-                        : `Percentile ranking across ${gd.source_count} source${gd.source_count !== 1 ? "s" : ""}`}
+                        ? `Z-Score ranking on one RNA consensus from ${gd.source_count} source${gd.source_count !== 1 ? "s" : ""}`
+                        : `Percentile ranking on one RNA consensus from ${gd.source_count} source${gd.source_count !== 1 ? "s" : ""}`}
                     </div>
                     <div className={styles.geneCardSub}>
                       Sources:{" "}
-                      {["DepMap", "HPA", "GEO"].map((src) => {
+                      {["DepMap", "HPA"].map((src) => {
                         const has = gd.sources.some((s) => s.source === src);
                         return (
                           <span key={src} className={has ? styles.srcYes : styles.srcNo}>
@@ -140,6 +142,24 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                         );
                       })}
                     </div>
+                    {gd.rna_consensus && (
+                      <div className={styles.geneCardSub}>
+                        RNA consensus (robust z): <strong>{gd.rna_consensus.z.toFixed(2)}</strong>
+                        {" · "}
+                        Discordance (QC):{" "}
+                        <strong>
+                          {gd.rna_consensus.discordance != null
+                            ? gd.rna_consensus.discordance.toFixed(2)
+                            : "n/a (one source)"}
+                        </strong>
+                      </div>
+                    )}
+                    {gd.rna_consensus?.mad_zero_sources?.length > 0 && (
+                      <div className={styles.geneCardSub} style={{ color: "#856404" }}>
+                        ⚠ MAD = 0 in {gd.rna_consensus.mad_zero_sources.join(" + ")}: most cell lines
+                        have the same value, so the standard deviation was used for the z-score.
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -171,12 +191,13 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                   </>
                 )}
               </div>
+
             </div>
 
             {/* ── Source-Level Scores per gene ── */}
             {genes.map((g) => {
               const gd = data.genes?.[g.hugo];
-              if (!gd || gd.sources.length === 0) return null;
+              if (!gd || (gd.sources.length === 0 && !gd.geo)) return null;
               return (
                 <div key={g.hugo} className={styles.sourceSection}>
                   <h4 className={styles.sectionLabel}>
@@ -194,6 +215,14 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                             <span>TPM</span>
                             <span className={styles.val}>{src.tpm}</span>
                           </div>
+                          {scoringMethod === "robust_z" && src.robust_z != null && (
+                            <div className={styles.sourceRow}>
+                              <span>Robust Z</span>
+                              <span className={styles.val}>
+                                {src.robust_z > 0 ? "+" : ""}{src.robust_z}
+                              </span>
+                            </div>
+                          )}
                           {(scoringMethod === "rrf" || scoringMethod === "zscore") && (
                             <div className={styles.sourceRow}>
                               <span>Z-Score</span>
@@ -239,6 +268,14 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                             <span>Intensity</span>
                             <span className={styles.val}>{data.protein.intensity}</span>
                           </div>
+                          {scoringMethod === "robust_z" && data.protein.robust_z != null && (
+                            <div className={styles.sourceRow}>
+                              <span>Robust Z</span>
+                              <span className={styles.val}>
+                                {data.protein.robust_z > 0 ? "+" : ""}{data.protein.robust_z}
+                              </span>
+                            </div>
+                          )}
                           {(scoringMethod === "rrf" || scoringMethod === "zscore") && (
                             <div className={styles.sourceRow}>
                               <span>Z-Score</span>
@@ -265,6 +302,11 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                               <span className={styles.val}>#{data.protein.pct_rank}</span>
                             </div>
                           )}
+                          {scoringMethod === "robust_z" && data.protein.mad_zero && (
+                            <div className={styles.sourceRow} style={{ color: "#856404" }}>
+                              <span>⚠ MAD = 0: SD used for the z-score</span>
+                            </div>
+                          )}
                         </>
                       ) : (
                         <div className={styles.sourceRow}>
@@ -273,6 +315,49 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                         </div>
                       )}
                     </div>
+
+                    {/* GEO support card: extra evidence only, not part of the score or rank.
+                        Only present when the GSM -> study map has been built. */}
+                    {gd.geo && (
+                      <div className={styles.sourceCard}>
+                        <h5 className={styles.sourceTitle}>GEO support</h5>
+                        <div className={styles.sourceRow}>
+                          <span>Status</span>
+                          <span
+                            className={styles.val}
+                            style={{
+                              color:
+                                gd.geo.status === "supportive" ? "#2d6a4f"
+                                : gd.geo.status === "contradictory" ? "#b02a37"
+                                : gd.geo.status === "mixed" ? "#856404"
+                                : "#999",
+                            }}
+                          >
+                            {gd.geo.status === "unavailable"
+                              ? "Unavailable"
+                              : `${gd.geo.status.charAt(0).toUpperCase()}${gd.geo.status.slice(1)} ${gd.geo.supportive}/${gd.geo.total}`}
+                          </span>
+                        </div>
+                        {gd.geo.total === 0 && (
+                          <div className={styles.sourceRow}>
+                            <span>No usable GEO study</span>
+                            <span className={styles.val}>—</span>
+                          </div>
+                        )}
+                        {gd.geo.studies?.map((s) => (
+                          <div key={s.gse_id} className={styles.sourceRow}>
+                            <span>{s.gse_id} (n={s.n_samples})</span>
+                            <span className={styles.val}>
+                              {s.z > 0 ? "+" : ""}{s.z}{" "}
+                              {s.verdict === "supportive" ? "✓" : s.verdict === "contradictory" ? "✗" : "~"}
+                            </span>
+                          </div>
+                        ))}
+                        <div className={styles.geneCardSub} style={{ marginTop: 6 }}>
+                          Not used in the score or rank.
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -457,20 +542,28 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
             <div className={styles.methodInfo}>
               <h4 className={styles.methodTitle}>Scoring Method</h4>
               <p className={styles.methodText}>
+                {scoringMethod === "robust_z" && (
+                  <>Expression scored from the <code>size</code> of one RNA consensus robust z (DepMap + HPA, log2(TPM+1), median/MAD), compressed with <code>asinh</code> and scaled to 0–1. Rank is the sorted score, so a cell line far above the rest scores clearly higher than one just above the median.</>
+                )}
                 {scoringMethod === "rrf" && (
-                  <>Expression ranked via <code>Z-Score</code> + <code>Percentile</code> per source (DepMap, HPA, GEO), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>
+                  <>Expression ranked via <code>Z-Score</code> + <code>Percentile</code> on a single RNA consensus (robust z, DepMap + HPA), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>
                 )}
                 {scoringMethod === "zscore" && (
-                  <>Expression ranked via <code>Z-Score</code> only per source (DepMap, HPA, GEO), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>
+                  <>Expression ranked via <code>Z-Score</code> only on a single RNA consensus (robust z, DepMap + HPA), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>
                 )}
                 {scoringMethod === "percentile" && (
-                  <>Expression ranked via <code>Percentile</code> only per source (DepMap, HPA, GEO), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>
+                  <>Expression ranked via <code>Percentile</code> only on a single RNA consensus (robust z, DepMap + HPA), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>
                 )}
                 {data.protein && (
-                  <> Protein scored separately, combined with RNA at the selected weighting.</>
+                  <>
+                    {scoringMethod === "robust_z"
+                      ? " Protein is scored the same way, from the size of its own robust z, "
+                      : " Protein scored separately, "}
+                    combined with RNA at the selected weighting.
+                  </>
                 )}
                 {genes.length > 1 && (
-                  <> Multi-gene combination via RRF across gene-specific ranks.</>
+                  <> Several genes are combined with a weighted geometric mean of the per-gene scores.</>
                 )}
                 {" "}Per-source scores use the selected RNA/Protein weights on the
                 same scale as the overall score.
@@ -483,7 +576,7 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                 <span className={styles.omicsLabel}>Data Coverage</span>
                 <br />
                 <span className={styles.omicsText}>
-                  RNA-seq ({data.data_coverage.rna_sources}/3 sources)
+                  RNA-seq ({data.data_coverage.rna_sources}/2 sources)
                   {data.data_coverage.has_protein && " · Proteomics"}
                   {data.data_coverage.has_mutations && " · Mutations"}
                   {data.data_coverage.has_fusions && " · Fusions"}

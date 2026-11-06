@@ -15,7 +15,6 @@ const ASSAY_OPTIONS = [
 const DATA_SOURCES = [
   { key: "depmap", label: "DepMap" },
   { key: "hpa", label: "HPA" },
-  { key: "geo", label: "GEO" },
 ];
 
 export default function FilterPanel({ filters, onChange }) {
@@ -76,8 +75,8 @@ export default function FilterPanel({ filters, onChange }) {
     if (filters.exclude_metabolite) n++;
     if (filters.exclude_mirna) n++;
     if (filters.core_only) n++;
-    const sources = filters.sources || ["depmap", "hpa", "geo"];
-    if (sources.length < 3) n++;
+    const sources = filters.sources || ["depmap", "hpa"];
+    if (sources.length < DATA_SOURCES.length) n++;
     if (filters.w_rna !== 0.7) n++;
     if (filters.top_n !== 20) n++;
     return n;
@@ -249,7 +248,7 @@ export default function FilterPanel({ filters, onChange }) {
               <label className={styles.label}>RNA Sources</label>
               <div className={styles.sourceChecks}>
                 {DATA_SOURCES.map((src) => {
-                  const sources = filters.sources || ["depmap", "hpa", "geo"];
+                  const sources = filters.sources || ["depmap", "hpa"];
                   const checked = sources.includes(src.key);
                   return (
                     <label key={src.key} className={styles.sourceCheck}>
@@ -313,7 +312,7 @@ export default function FilterPanel({ filters, onChange }) {
                   checked={filters.core_only}
                   onChange={(e) => set("core_only", e.target.checked)}
                 />
-                Core only (data in all 3 sources)
+                Core only (data in all RNA sources)
               </label>
             </div>
 

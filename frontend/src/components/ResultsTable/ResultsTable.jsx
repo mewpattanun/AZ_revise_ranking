@@ -236,6 +236,11 @@ export default function ResultsTable({
                       >
                         {r.score.toFixed(4)}
                       </span>
+                      {r.score_flags && r.score_flags.length > 0 && (
+                        <span className={styles.rnaFlag} title={r.score_flags.join("; ")}>
+                          ⚠
+                        </span>
+                      )}
                     </div>
                   </td>
                   {showMatchColumn && (

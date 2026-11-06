@@ -85,11 +85,12 @@ function DocsContent() {
 
       <h4>Multi-Gene Search</h4>
       <p>
-        When searching for multiple genes, the system ranks cell lines per gene
-        individually, then fuses the ranks using Reciprocal Rank Fusion (RRF).
-        Scores are normalised to 0–1, where 1.0 means the cell line is ranked #1
-        for every gene searched. Per-gene ranks are shown in each results row
-        so you can see which genes a cell line is strong or weak in.
+        When searching for multiple genes, every cell line gets a 0 to 1 score for
+        each gene (for a LOW gene the score is flipped, so higher is always better).
+        The gene scores are combined with a weighted geometric mean, so one gene that
+        fails pulls the overall score down. A cell line with no data for a gene is
+        scored on the other genes and marked with ⚠. Per-gene ranks are shown in each
+        results row so you can see which genes a cell line is strong or weak in.
       </p>
 
       <h4>Score Interpretation</h4>
@@ -142,7 +143,7 @@ function SourcesContent() {
           </tr>
           <tr>
             <td><strong>GEO</strong></td>
-            <td>Gene Expression Omnibus curated RNA-seq datasets, reprocessed to TPM</td>
+            <td>Gene Expression Omnibus curated RNA-seq datasets, reprocessed to TPM. Not used in ranking (heterogeneous studies); shown as GEO support instead</td>
             <td>~250 cell lines</td>
           </tr>
         </tbody>
@@ -196,29 +197,43 @@ function MethodsContent() {
 
       <h4>Step 1: Per-Gene Expression Scoring</h4>
       <p>
-        For each target gene, RNA expression data (TPM) is retrieved from up to
-        3 sources (DepMap, HPA, GEO). Within each source, two statistical rankings
-        are computed:
+        DepMap and HPA derive from the same underlying data, so they are not
+        treated as independent evidence. Each source is standardised separately
+        (a gene-wise robust z-score of log2(TPM+1) across cell lines, using the
+        median and MAD) and the matched robust z-scores are averaged into one RNA
+        consensus per cell line. The difference between the two sources is kept
+        as a discordance QC value (shown in the detail panel); it does not change
+        the score.
       </p>
-      <ul>
-        <li><strong>Z-Score Rank</strong> — Standardises expression relative to the population mean and standard deviation</li>
-        <li><strong>Percentile Rank</strong> — Ranks by the fraction of cell lines with lower expression</li>
-      </ul>
       <p>
-        These rank lists are combined using <strong>Reciprocal Rank Fusion (RRF)</strong> with
-        k=60, averaged across the sources a cell line appears in. Averaging (rather
-        than summing) prevents penalising cell lines that are missing from one data source.
+        The expression score comes from the <strong>size</strong> of the consensus robust z,
+        not from its rank: z is compressed with asinh (so one extreme cell line does not
+        squash all the others) and scaled to 0–1. A cell line far above the rest
+        therefore scores clearly higher than one just above the median, and two cell
+        lines with almost the same expression get almost the same score. The rank
+        shown in the table is simply the sorted score. A cell line present in only one
+        source is scored on that source alone, so missing one source is not penalised.
+      </p>
+      <p>
+        If MAD is 0 for a gene in a source (most cell lines share the same value, e.g.
+        TPM = 0), the standard deviation is used instead and the cell line is flagged
+        with ⚠ in the results table and the detail panel. The legacy rank-based methods
+        (Z-Score / Percentile → RRF) can still be selected for comparison.
       </p>
 
       <h4>Step 2: Protein Scoring</h4>
       <p>
-        Protein intensity data undergoes the same Z-Score + Percentile → RRF process
-        as RNA expression.
+        Protein is scored the same way as RNA: a gene-wise robust z-score of the
+        protein intensities across cell lines (median and MAD), compressed with asinh
+        and scaled to 0–1, so a cell line with much higher protein than the rest scores
+        clearly higher. If MAD is 0 the standard deviation is used and the cell line is
+        flagged with ⚠. (The legacy methods still score protein with Z-Score +
+        Percentile → RRF.)
       </p>
 
       <h4>Step 3: RNA + Protein Combination</h4>
       <p>
-        RNA and protein RRF scores are min-max normalised to [0, 1], then combined
+        RNA and protein scores are min-max normalised to [0, 1], then combined
         with user-configurable weights (default: 70% RNA, 30% Protein):
       </p>
       <code className={styles.formula}>
@@ -229,17 +244,26 @@ function MethodsContent() {
         layer is available, with the confidence field reflecting partial coverage.
       </p>
 
-      <h4>Step 4: Multi-Gene Fusion</h4>
+      <h4>Step 4: Multi-Gene Combination</h4>
       <p>
-        For multi-gene searches, cell lines are ranked per gene by their combined
-        score, then fused across genes using <strong>summed RRF</strong>. The raw
-        RRF score is normalised by dividing by the theoretical maximum (n_genes / (k + 1)),
-        so a cell line ranked #1 for all genes receives a score of 1.0.
+        For multi-gene searches, the combined score of each gene (Step 3, between 0 and 1,
+        flipped for LOW genes) is called D. The genes are combined with a
+        <strong> weighted geometric mean</strong>:
+      </p>
+      <code className={styles.formula}>
+        score = exp( Σ w_g × log(D_g + ε) / Σ w_g )
+      </code>
+      <p>
+        w_g is the weight of each gene (equal by default) and ε is a tiny number (0.000001)
+        that only avoids log(0). A single poor gene lowers the score a lot. Example with
+        three genes: a cell line with 1.00, 0.98 and 0.05 has an arithmetic mean of 0.677 but
+        a geometric mean of 0.366, while a balanced cell line with 0.82, 0.80 and 0.78 scores
+        0.800 either way, so the balanced one moves above.
       </p>
       <p>
-        Ranks are used instead of raw scores because different genes have incomparable
-        expression scales. RRF naturally rewards cell lines that are consistently
-        strong across all searched genes.
+        If a cell line has no score for a gene, that gene is skipped for it (the other
+        weights are rescaled) and the cell line is marked with ⚠. The older summed RRF rule is
+        still available for comparison (multi_gene_method = summed_rrf).
       </p>
 
       <h4>Step 5: Hard Filters</h4>
@@ -262,6 +286,26 @@ function MethodsContent() {
         When an assay type is selected, cell lines are checked for compatibility
         based on growth pattern (adherent vs. suspension). Warnings are displayed
         but do not affect ranking order.
+      </p>
+
+      <h4>Step 8: GEO Support</h4>
+      <p>
+        GEO is not used in the score or the rank. It is only shown in the detail panel
+        as extra evidence. GEO samples come from different studies, so each study is
+        checked on its own: the cell line is compared with the other cell lines in the
+        same study (robust z-score). When you search for HIGH, a study supports the cell
+        line if its z is +1 or more, and contradicts it if z is -1 or less. For LOW it
+        is the other way round.
+      </p>
+      <ul>
+        <li><strong>Supportive</strong>: more studies support than contradict, and at least half support (e.g. 3/4)</li>
+        <li><strong>Contradictory</strong>: more studies contradict than support, and at least half contradict</li>
+        <li><strong>Mixed</strong>: anything else</li>
+        <li><strong>Unavailable</strong>: no usable GEO study for this cell line</li>
+      </ul>
+      <p>
+        x/y means x studies support out of y studies that include the cell line. The
+        z-score of each study is listed in the detail panel.
       </p>
 
       <h4>Similarity Scoring (Similar Alternatives)</h4>

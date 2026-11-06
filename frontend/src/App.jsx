@@ -22,7 +22,7 @@ const DEFAULT_FILTERS = {
   filter_mode: "filter",  // "filter" = hard exclude, "boost" = Q6 soft boost
   core_only: false,
   top_n: 20,
-  sources: ["depmap", "hpa", "geo"],
+  sources: ["depmap", "hpa"],
   assay_type: null,
   msi_max: null,
   cin_max: null,

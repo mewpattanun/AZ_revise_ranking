@@ -80,7 +80,7 @@ export default function CompareView({ achIds, genes, onClose }) {
                   </tr>
 
                   {/* Expression per source */}
-                  {["DepMap", "HPA", "GEO"].map((src) => {
+                  {["DepMap", "HPA"].map((src) => {
                     const vals = data.comparisons.map((c) => {
                       const match = (c.expression_sources || []).find((s) => s.source === src);
                       return match ? match.tpm : null;

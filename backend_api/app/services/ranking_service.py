@@ -2,18 +2,27 @@
 Core ranking algorithm.
 
 Pipeline:
-  1. Expression ranking: Z-Score + Percentile per source → RRF ensemble
-  2. Protein ranking: Z-Score + Percentile → RRF
+  1. Expression score: DepMap + HPA are standardised separately (gene-wise
+     robust z of TPM) and averaged into ONE RNA consensus. The score is
+     computed from the SIZE of that consensus z (asinh-compressed, then
+     min-max to [0, 1]), so a cell line far above the rest scores clearly
+     higher than one just above the median. The rank is only a display of the
+     sorted score. (Legacy rank-based methods rrf / zscore / percentile are
+     still selectable for comparison.)
+  2. Protein score: same as RNA, from the size of the protein robust z
+     (asinh → [0, 1]); legacy Z-Score + Percentile → RRF for the legacy methods
   3. Combined RNA + Protein (4 scenarios, configurable weights)
   4. Mutation/Fusion hard filter (include/exclude/ignore)
-  5. Multi-gene combination via RRF
+  5. Multi-gene combination: weighted geometric mean of the per-gene scores
+     (desirability in 0-1, LOW genes inverted), so one failed gene pulls the
+     score down. The old summed RRF is still selectable (multi_gene_method).
   6. Optional post-filters (disease, lineage, core-only)
 
 Note on RRF averaging:
   When fusing the per-source expression ranks, we AVERAGE the RRF contributions
   (divide by the number of rank lists that actually cover each cell line) instead
   of summing them. This prevents cell lines that are missing a data source (e.g.
-  no GEO) from being penalised: a cell line with very high RNA in the 2 sources
+  no HPA) from being penalised: a cell line with very high RNA in the source
   it has is judged on the quality of those ranks, not on how many sources exist.
   Coverage is surfaced separately (source_count / is_core) so users who want
   multi-source validation can filter for it instead of it being baked into score.
@@ -82,73 +91,113 @@ def _norm01(s: pd.Series) -> pd.Series:
 
 # ── Expression ranking for one gene ──────────────────────────
 
-EXPRESSION_SOURCES = [
-    ("depmap", "fact_expression_depmap"),
-    ("hpa",    "fact_expression_hpa"),
-    ("geo",    "fact_expression_geo"),
-]
+SCORING_METHODS = ("robust_z", "rrf", "zscore", "percentile")
+
+
+def magnitude_score(consensus: pd.Series) -> pd.Series:
+    """
+    Score from the SIZE of the consensus robust z (keeps magnitude, unlike a rank).
+
+    asinh(z) is ~z near 0 and ~log(2z) for big z, so an outlier at z = 60 does
+    not squash every other cell line to ~0 when we min-max to [0, 1]. It is
+    monotonic, so the order is the order of the consensus z (HIGH: biggest
+    first, LOW: ascending, same as before).
+    """
+    return _norm01(np.arcsinh(consensus.astype(float)))
+
+
+def score_expression(signal: pd.DataFrame, scoring_method: str = "robust_z") -> pd.Series:
+    """
+    Expression score per cell line from the RNA consensus signal.
+    scoring_method:
+      "robust_z"  → magnitude of the consensus robust z (default, point 3)
+      "rrf" / "zscore" / "percentile" → legacy rank-based (RRF of z-rank / pct-rank)
+    """
+    if scoring_method not in SCORING_METHODS:
+        raise ValueError(f"unknown scoring_method: {scoring_method!r}")
+    if len(signal) < 2:
+        return pd.Series(dtype=float)
+    consensus = signal["consensus"]
+
+    if scoring_method == "robust_z":
+        return magnitude_score(consensus)
+
+    rank_dict: dict[str, pd.Series] = {}
+    if scoring_method in ("rrf", "zscore"):
+        rank_dict["rna_zscore"] = _zscore_rank(consensus)
+    if scoring_method in ("rrf", "percentile"):
+        rank_dict["rna_percentile"] = _percentile_rank(consensus)
+    return _rrf(rank_dict, average=True)
 
 
 def rank_expression(
     ensembl_id: str,
-    scoring_method: str = "rrf",
+    scoring_method: str = "robust_z",
     enabled_sources: list[str] | None = None,
 ) -> tuple[pd.Series, pd.Series]:
     """
-    Compute expression ranking for one gene.
-    scoring_method: "rrf" (z-score + percentile ensemble), "zscore" only, "percentile" only.
-    enabled_sources: list of source names to include (e.g. ["depmap", "hpa", "geo"]).
+    Compute the expression score for one gene.
+    enabled_sources: RNA sources that feed the consensus (e.g. ["depmap", "hpa"]).
                      None means all sources.
     Returns (scores indexed by ach_id, source_coverage Series).
     """
-    rank_dict: dict[str, pd.Series] = {}
-    source_presence: dict[str, set[str]] = {}
-
-    for src_name, src_table in EXPRESSION_SOURCES:
-        # Skip sources not selected by the user
-        if enabled_sources is not None and src_name not in enabled_sources:
-            continue
-
-        df = data_service.get_expression_for_gene(ensembl_id, src_table)
-        if len(df) < 2:
-            continue
-
-        tpm = df.set_index("ach_id")["tpm"]
-
-        if scoring_method in ("rrf", "zscore"):
-            rank_dict[f"{src_name}_zscore"] = _zscore_rank(tpm)
-        if scoring_method in ("rrf", "percentile"):
-            rank_dict[f"{src_name}_percentile"] = _percentile_rank(tpm)
-
-        for ach in tpm.index:
-            source_presence.setdefault(ach, set()).add(src_name)
-
-    if not rank_dict:
+    # DepMap + HPA share the same underlying data → one RNA consensus per cell line
+    # (mean of per-source robust z-scores; discordance is QC only, see data_service)
+    signal = data_service.get_rna_consensus(ensembl_id, enabled_sources)
+    if len(signal) < 2:
         return pd.Series(dtype=float), pd.Series(dtype=int)
+    return score_expression(signal, scoring_method), signal["coverage"].astype(int)
 
-    # Average RRF across source/method rank lists so cell lines with fewer
-    # sources are not penalised for missing data.
-    rrf = _rrf(rank_dict, average=True)
-    coverage = pd.Series({ach: len(srcs) for ach, srcs in source_presence.items()})
-    return rrf, coverage
+
+def _gene_flags(signal: pd.DataFrame, prot_scores: pd.Series) -> dict[str, list[str]]:
+    """
+    Flags per cell line for one gene: sources (RNA and/or protein) where MAD = 0,
+    so the robust z used the SD instead. Only sources that cover the cell line.
+    """
+    flags: dict[str, list[str]] = {}
+    for src in signal.attrs.get("mad_zero_sources", []):
+        col = f"z_{src}"
+        if col not in signal.columns:
+            continue
+        label = data_service.RNA_SOURCE_LABELS.get(src, src)
+        for ach in signal.index[signal[col].notna()]:
+            flags.setdefault(ach, []).append(f"{label} MAD=0 (SD used)")
+    if prot_scores.attrs.get("mad_zero"):
+        for ach in prot_scores.index:
+            flags.setdefault(ach, []).append("Protein MAD=0 (SD used)")
+    return flags
 
 
 # ── Protein ranking for one gene ─────────────────────────────
 
-def rank_protein(ensembl_id: str) -> pd.Series:
-    """Compute RRF protein score for one gene."""
+def rank_protein(ensembl_id: str, scoring_method: str = "robust_z") -> pd.Series:
+    """
+    Protein score for one gene.
+    robust_z (default): same as RNA — robust z of the intensities across cell
+    lines → asinh → [0, 1]. scores.attrs["mad_zero"] says whether MAD was 0.
+    Legacy methods: Z-Score + Percentile → RRF.
+    """
     df = data_service.get_protein_for_gene(ensembl_id)
     if len(df) < 2:
         return pd.Series(dtype=float)
 
-    intensity = df.set_index("ach_id")["protein_intensity"]
+    intensity = df.set_index("ach_id")["protein_intensity"].astype(float)
+
+    if scoring_method == "robust_z":
+        z, mad_zero = data_service.robust_z_with_flag(intensity)
+        scores = magnitude_score(z)
+        scores.attrs["mad_zero"] = mad_zero
+        return scores
+
     rank_dict = {
         "protein_zscore": _zscore_rank(intensity),
         "protein_percentile": _percentile_rank(intensity),
     }
     # Protein has a single source; averaging vs summing gives the same ordering,
     # but we average for consistency with the expression side.
-    return _rrf(rank_dict, average=True)
+    scores = _rrf(rank_dict, average=True)
+    scores.attrs["mad_zero"] = False
+    return scores
 
 
 # ── Combine RNA + Protein (4 scenarios) ──────────────────────
@@ -158,13 +207,19 @@ def combine_rna_protein(
     prot_rrf: pd.Series,
     w_rna: float,
     w_prot: float,
+    invert: bool = False,
 ) -> pd.DataFrame:
     """
-    Combine expression and protein RRF scores.
+    Combine expression and protein scores.
+    invert=True flips both to "low is good" (1 - score), used for LOW genes in
+    multi-gene searches so that a higher score is always better.
     Returns DataFrame with: ach_id, combined_score, scenario, coverage_confidence.
     """
     expr_norm = _norm01(expr_rrf)
     prot_norm = _norm01(prot_rrf)
+    if invert:
+        expr_norm = 1.0 - expr_norm
+        prot_norm = 1.0 - prot_norm
     all_ids = set(expr_norm.index) | set(prot_norm.index)
 
     rows = []
@@ -197,6 +252,39 @@ def combine_rna_protein(
         })
 
     return pd.DataFrame(rows)
+
+
+# ── Multi-gene fusion ────────────────────────────────────────
+
+MULTI_GENE_METHODS = ("geometric", "summed_rrf")
+GEOMETRIC_EPS = 1e-6   # numerical stability only (log of 0); not a tuning knob
+
+
+def weighted_geometric_mean(
+    scores: pd.DataFrame,
+    weights: dict[str, float] | None = None,
+    eps: float = GEOMETRIC_EPS,
+) -> pd.Series:
+    """
+    Weighted geometric mean of per-gene desirability, one row per cell line:
+
+        exp[ sum_g w_g * log(D_g + eps) / sum_g w_g ]
+
+    scores: DataFrame (rows = cell lines, columns = genes) with D_g in (0, 1],
+            higher = better for every gene (LOW genes already inverted).
+            NaN = the cell line has no score for that gene.
+    Missing-gene policy: a gene without a score is SKIPPED for that cell line
+    (the weights of the remaining genes are renormalised), so a cell line is
+    not penalised for data it does not have. Cell lines with no score at all get NaN.
+    """
+    w = pd.Series({g: 1.0 for g in scores.columns})
+    if weights:
+        w.update(pd.Series(weights, dtype=float).reindex(scores.columns).dropna())
+    have = scores.notna()
+    wsum = have.mul(w, axis=1).sum(axis=1)
+    logs = np.log(scores.astype(float).clip(lower=0.0) + eps).fillna(0.0)
+    num = logs.mul(w, axis=1).sum(axis=1)
+    return np.exp(num / wsum.where(wsum > 0))
 
 
 # ── Mutation / Fusion hard filters ───────────────────────────
@@ -265,6 +353,26 @@ def apply_mirna_filter(
     return df[~df["ach_id"].isin(high)] if high else df
 
 
+def _score_flags(
+    flags_per_gene: dict[str, dict[str, list[str]]],
+    ach_id: str,
+    genes_skipped: list[str] | None = None,
+) -> list[str] | None:
+    """
+    Collect one cell line's flags over all genes (gene-prefixed if several):
+    MAD=0 notes, plus genes skipped because the cell line has no score for them.
+    """
+    multi = len(flags_per_gene) > 1
+    out = [
+        f"{hugo}: {text}" if multi else text
+        for hugo, per_cell in flags_per_gene.items()
+        for text in per_cell.get(ach_id, [])
+    ]
+    if isinstance(genes_skipped, list):
+        out += [f"No data for {hugo}, skipped" for hugo in genes_skipped]
+    return out or None
+
+
 # ── Full ranking pipeline ────────────────────────────────────
 
 def run_ranking(
@@ -288,9 +396,11 @@ def run_ranking(
     q6_boost_enabled: bool = True,
     core_only: bool = False,
     top_n: int = 20,
-    scoring_method: str = "rrf",
+    scoring_method: str = "robust_z",
     sources: list[str] | None = None,
     assay_type: str | None = None,
+    include_geo: bool = False,
+    multi_gene_method: str = "geometric",
 ) -> list[dict]:
     """
     Execute the full ranking pipeline. Returns list of ranked cell line dicts.
@@ -298,20 +408,33 @@ def run_ranking(
     # Per-gene scoring
     combined_per_gene: dict[str, pd.DataFrame] = {}
     coverage_per_gene: dict[str, pd.Series] = {}
+    flags_per_gene: dict[str, dict[str, list[str]]] = {}
+
+    if multi_gene_method not in MULTI_GENE_METHODS:
+        raise ValueError(f"unknown multi_gene_method: {multi_gene_method!r}")
+    # Geometric mean needs "higher = better" for every gene, so LOW genes are
+    # inverted (1 - score). Single-gene search and summed RRF keep the old scores.
+    invert_low = len(genes) > 1 and multi_gene_method == "geometric"
 
     for gene in genes:
         ensg = gene["ensembl_id"]
 
-        # 1. Expression ensemble (only selected RNA sources)
-        rna_sources = [s for s in (sources or ["depmap", "hpa", "geo"]) if s != "protein"]
-        expr_rrf, coverage = rank_expression(ensg, scoring_method, enabled_sources=rna_sources)
+        # 1. Expression score from the RNA consensus (only selected RNA sources)
+        rna_sources = [s for s in (sources or ["depmap", "hpa"]) if s != "protein"]
+        signal = data_service.get_rna_consensus(ensg, rna_sources)
+        expr_rrf = score_expression(signal, scoring_method)
+        coverage = signal["coverage"].astype(int) if len(signal) >= 2 else pd.Series(dtype=int)
         coverage_per_gene[gene["hugo"]] = coverage
 
         # 2. Protein (always scored, independent of the RNA source filter)
-        prot_rrf = rank_protein(ensg)
+        prot_rrf = rank_protein(ensg, scoring_method)
+        flags_per_gene[gene["hugo"]] = _gene_flags(signal, prot_rrf)
 
         # 3. Combine
-        combined = combine_rna_protein(expr_rrf, prot_rrf, w_rna, w_protein)
+        combined = combine_rna_protein(
+            expr_rrf, prot_rrf, w_rna, w_protein,
+            invert=invert_low and gene["direction"] == "low",
+        )
 
         # 4. Mutation/Fusion filter
         combined = apply_mutation_filter(combined, mutation_mode, ensg)
@@ -332,21 +455,25 @@ def run_ranking(
         final_df["final_score"] = final_df["combined_score"]
     else:
         gene_ranks: dict[str, pd.Series] = {}
+        desirability: dict[str, pd.Series] = {}
         for gene in genes:
             df_g = combined_per_gene[gene["hugo"]].copy()
-            ascending = gene["direction"] == "low"
+            # rank 1 = best for the requested direction (display + summed RRF)
+            ascending = gene["direction"] == "low" and not invert_low
             df_g = df_g.sort_values("combined_score", ascending=ascending).reset_index(drop=True)
             df_g["gene_rank"] = range(1, len(df_g) + 1)
             gene_ranks[gene["hugo"]] = df_g.set_index("ach_id")["gene_rank"]
+            desirability[gene["hugo"]] = df_g.set_index("ach_id")["combined_score"]
 
-        # Multi-gene fusion keeps raw-sum RRF (a cell line strong across MORE
-        # genes should rank higher — that is the intended behaviour here).
-        multi_rrf = _rrf(gene_ranks, average=False)
-        # Normalise by dividing by the theoretical maximum RRF score.
-        # Best possible = each gene at rank 1 → n_genes × 1/(k+1).
-        # A cell line ranked #1 for ALL genes → 1.0; worse ranks → < 1.0.
-        theoretical_max = len(genes) / (RRF_K + 1)
-        multi_rrf = multi_rrf / theoretical_max
+        if multi_gene_method == "geometric":
+            # Weighted geometric mean of per-gene desirability: one failed gene
+            # meaningfully lowers the score. Missing gene = skipped (see helper).
+            weights = {g["hugo"]: float(g.get("weight", 1.0)) for g in genes}
+            multi_rrf = weighted_geometric_mean(pd.DataFrame(desirability), weights)
+        else:
+            # Legacy: raw-sum RRF of per-gene ranks, divided by the theoretical
+            # maximum (each gene at rank 1 -> n_genes x 1/(k+1)).
+            multi_rrf = _rrf(gene_ranks, average=False) / (len(genes) / (RRF_K + 1))
 
         rows = []
         for ach in multi_rrf.index:
@@ -364,6 +491,10 @@ def run_ranking(
                 "final_score": float(multi_rrf[ach]),
                 "coverage_confidence": float(np.mean(confidences)) if confidences else 0.0,
                 "scenario": " | ".join(scenarios),
+                # genes this cell line has no score for (skipped in the geometric mean)
+                "genes_skipped": [
+                    g["hugo"] for g in genes if ach not in desirability[g["hugo"]].index
+                ],
             })
 
         final_df = pd.DataFrame(rows)
@@ -394,12 +525,12 @@ def run_ranking(
         if subtype_filter and (cl.get("subtype") or "").lower() != subtype_filter.lower():
             continue
 
-        # Core only: require data in all 3 expression sources (for first gene)
+        # Core only: require data in all expression sources (for first gene)
         is_core = False
         first_hugo = genes[0]["hugo"]
         if first_hugo in coverage_per_gene:
             cov = coverage_per_gene[first_hugo]
-            is_core = row["ach_id"] in cov.index and cov[row["ach_id"]] >= 3
+            is_core = row["ach_id"] in cov.index and cov[row["ach_id"]] >= len(data_service.RNA_SOURCE_TABLES)
 
         if core_only and not is_core:
             continue
@@ -446,6 +577,7 @@ def run_ranking(
             "mutations": mutations,
             "fusions": fusions,
             "per_gene_rank": per_gene_rank,
+            "score_flags": _score_flags(flags_per_gene, row["ach_id"], row.get("genes_skipped")),
         })
 
     # Determine sort direction for post-filter re-ranking.
@@ -493,6 +625,21 @@ def run_ranking(
             r["rank"] = i + 1
 
     results = results[:top_n]
+
+    # GEO support for the returned cell lines (extra evidence only:
+    # it is added after ranking and never changes score or rank)
+    if include_geo and results:
+        geo_per_gene = {}
+        for gene in genes:
+            geo = data_service.get_geo_support(gene["ensembl_id"], gene["direction"])
+            if geo is not None:
+                geo_per_gene[gene["hugo"]] = geo[0]
+        if geo_per_gene:
+            for r in results:
+                r["geo"] = {
+                    hugo: data_service.geo_summary_for_cell_line(summary, r["ach_id"])
+                    for hugo, summary in geo_per_gene.items()
+                }
 
     # Q7 assay compatibility warnings (does NOT change ranking order)
     if assay_type and assay_type != "none":

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/celllines", tags=["celllines"])
 
 
 # RNA sources we surface per-source scores for (name shown in UI -> internal source key)
-_RNA_SOURCES = [("DepMap", "depmap"), ("HPA", "hpa"), ("GEO", "geo")]
+_RNA_SOURCES = [("DepMap", "depmap"), ("HPA", "hpa")]
 
 
 def _per_source_scores(
@@ -45,7 +45,6 @@ def _per_source_scores(
             table = {
                 "depmap": "fact_expression_depmap",
                 "hpa": "fact_expression_hpa",
-                "geo": "fact_expression_geo",
             }[src_key]
             df = data_service.get_expression_for_gene(ensg, table)
             if len(df) == 0 or not (df["ach_id"] == ach_id).any():
@@ -59,7 +58,7 @@ def _per_source_scores(
                     mutation_mode="ignore",
                     fusion_mode="ignore",
                     top_n=100000,
-                    scoring_method="rrf",
+                    scoring_method="robust_z",
                     sources=[src_key, "protein"],
                 )
             except Exception:
@@ -134,7 +133,7 @@ def get_evidence(
                     mutation_mode="ignore",
                     fusion_mode="ignore",
                     top_n=100000,
-                    scoring_method="rrf",
+                    scoring_method="robust_z",
                 )
             except Exception:
                 continue
@@ -188,7 +187,6 @@ def get_cell_line(ach_id: str, gene: str | None = None):
         for src_name, src_table in [
             ("DepMap", "fact_expression_depmap"),
             ("HPA", "fact_expression_hpa"),
-            ("GEO", "fact_expression_geo"),
         ]:
             df = data_service.get_expression_for_gene(ensg, src_table)
             match = df[df["ach_id"] == ach_id]
@@ -243,7 +241,6 @@ def compare_cell_lines(req: CompareRequest):
         for src_name, src_table in [
             ("DepMap", "fact_expression_depmap"),
             ("HPA", "fact_expression_hpa"),
-            ("GEO", "fact_expression_geo"),
         ]:
             df = data_service.get_expression_for_gene(ensg, src_table)
             match = df[df["ach_id"] == ach_id]

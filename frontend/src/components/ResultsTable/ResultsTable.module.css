@@ -234,6 +234,13 @@
   background: #dc3545;
 }
 
+.rnaFlag {
+  margin-left: 6px;
+  font-size: 12px;
+  color: #b8860b;
+  cursor: help;
+}
+
 .scoreVal {
   font-weight: 700;
   font-size: 13px;

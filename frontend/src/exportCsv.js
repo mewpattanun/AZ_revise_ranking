@@ -39,7 +39,7 @@ export function exportResultsCsv({ results, genes, filters }) {
     `# Genes: ${genes.map((g) => `${g.hugo} (${g.direction})`).join("; ")}`
   );
   lines.push(`# RNA weight: ${filters.w_rna}  Protein weight: ${filters.w_protein}`);
-  lines.push(`# Sources: ${(filters.sources || ["depmap", "hpa", "geo"]).join(", ")}`);
+  lines.push(`# Sources: ${(filters.sources || ["depmap", "hpa"]).join(", ")}`);
 
   if (filters.disease_filter) lines.push(`# Disease filter: ${filters.disease_filter}`);
   if (filters.lineage_filter) lines.push(`# Lineage filter: ${filters.lineage_filter}`);

@@ -17,10 +17,11 @@ const DEFAULT_FILTERS = {
   lineage_filter: null,
   core_only: false,
   top_n: 20,
-  sources: ["depmap", "hpa", "geo"],
+  sources: ["depmap", "hpa"],
 };
 
 const SCORING_METHODS = [
+  { value: "robust_z", label: "Robust Z (magnitude)" },
   { value: "rrf", label: "RRF Ensemble" },
   { value: "zscore", label: "Z-Score Only" },
   { value: "percentile", label: "Percentile Only" },
@@ -30,7 +31,7 @@ export default function TestApp() {
   /* Search state */
   const [genes, setGenes] = useState([]);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
-  const [scoringMethod, setScoringMethod] = useState("rrf");
+  const [scoringMethod, setScoringMethod] = useState("robust_z");
 
   /* Results state */
   const [results, setResults] = useState(null);
@@ -150,9 +151,9 @@ export default function TestApp() {
               ))}
             </div>
             <p className={styles.methodHint}>
-              <b>RRF</b> = Z-Score + Percentile combined via Reciprocal Rank Fusion (default).
-              <b> Z-Score</b> = standard deviations from mean only.
-              <b> Percentile</b> = position in distribution only.
+              <b>Robust Z</b> = score from the size of the RNA consensus robust z, so how far above the rest is kept (default).
+              <b> RRF</b> = Z-Score + Percentile ranks combined via Reciprocal Rank Fusion (legacy).
+              <b> Z-Score</b> / <b>Percentile</b> = legacy rank-based, for comparison.
             </p>
           </div>
 

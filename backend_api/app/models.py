@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class GeneTarget(BaseModel):
     hugo: str = Field(..., description="HUGO gene symbol, e.g. EGFR")
     direction: str = Field("high", pattern="^(high|low)$", description="high = want high expression, low = want low")
+    weight: float = Field(1.0, gt=0, description="Importance of this gene in a multi-gene search (default: equal weights)")
 
 
 class RankRequest(BaseModel):
@@ -31,12 +32,22 @@ class RankRequest(BaseModel):
     target_lineage: str | None = Field(None, description="Preferred lineage for Q6 boost")
     target_subtype: str | None = Field(None, description="Preferred subtype for Q6 boost")
     q6_boost_enabled: bool = Field(True, description="Enable Q6 soft boost (default on)")
-    core_only: bool = Field(False, description="Only cell lines with data in all 3 expression sources")
+    core_only: bool = Field(False, description="Only cell lines with data in all expression sources")
     top_n: int = Field(20, ge=1, le=200, description="Number of results to return")
-    scoring_method: str = Field("rrf", pattern="^(rrf|zscore|percentile)$", description="Scoring method: rrf (ensemble), zscore only, percentile only")
+    scoring_method: str = Field(
+        "robust_z",
+        pattern="^(robust_z|rrf|zscore|percentile)$",
+        description="Scoring method: robust_z (score from the size of the RNA consensus robust z, default), "
+                    "or the legacy rank-based rrf / zscore / percentile",
+    )
+    multi_gene_method: str = Field(
+        "geometric",
+        pattern="^(geometric|summed_rrf)$",
+        description="How several genes are combined: geometric = weighted geometric mean (default), summed_rrf = legacy",
+    )
     sources: list[str] = Field(
-        default=["depmap", "hpa", "geo"],
-        description="RNA expression sources to include in ranking: depmap, hpa, geo. Protein is always scored separately (see w_protein)."
+        default=["depmap", "hpa"],
+        description="RNA expression sources to include in ranking: depmap, hpa. Protein is always scored separately (see w_protein)."
     )
     assay_type: str | None = Field(
         None,
@@ -79,6 +90,8 @@ class RankedCellLine(BaseModel):
     per_gene_rank: dict[str, int] | None = None
     q7_status: str | None = None
     q7_warning: str | None = None
+    score_flags: list[str] | None = None
+    geo: dict[str, dict] | None = None
 
 
 class RankResponse(BaseModel):

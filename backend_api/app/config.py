@@ -25,6 +25,7 @@ PARQUET = {
     "fact_expression_depmap": DATA_DIR / "fact_expression_depmap.parquet",
     "fact_expression_hpa":  DATA_DIR / "fact_expression_hpa.parquet",
     "fact_expression_geo":  DATA_DIR / "fact_expression_geo.parquet",
+    "dim_geo_samples":      DATA_DIR / "dim_geo_samples.parquet",   # GSM -> GSE, built by data_prepare/build_geo_study_map.py
     "fact_proteomics":      DATA_DIR / "fact_proteomics.parquet",
     "fact_mutations":       DATA_DIR / "fact_mutations.parquet",
     "fact_fusions":         DATA_DIR / "fact_fusions.parquet",

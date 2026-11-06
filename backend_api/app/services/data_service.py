@@ -63,6 +63,261 @@ def get_expression_for_gene(ensembl_id: str, source_table: str):
     )
 
 
+# DepMap and HPA RNA values derive from the same underlying data, so they are
+# NOT independent evidence. Each view is standardised separately and then
+# combined ONCE into a single RNA consensus. (GEO is excluded: heterogeneous
+# studies, see ranking_service.)
+RNA_SOURCE_TABLES = {
+    "depmap": "fact_expression_depmap",
+    "hpa": "fact_expression_hpa",
+}
+
+_RNA_SIGNAL_COLUMNS = ["consensus", "coverage", "discordance"]
+RNA_SOURCE_LABELS = {"depmap": "DepMap", "hpa": "HPA"}
+
+# How expression values are prepared before the robust z-score is computed:
+#   "log2" -> log2(TPM + 1)  (current choice: the supervisor's worked examples
+#                             only add up on a log scale; raw TPM gives z up to ~60)
+#   "tpm"  -> raw TPM
+# Still switched in ONE place, in case the supervisor wants the other.
+RNA_TRANSFORM = "log2"
+
+
+def _prepare(tpm: pd.Series, transform: str) -> pd.Series:
+    """Prepare TPM values for the robust z-score according to `transform`."""
+    tpm = tpm.astype(float).clip(lower=0)
+    if transform == "tpm":
+        return tpm
+    if transform == "log2":
+        return np.log2(tpm + 1.0)
+    raise ValueError(f"unknown RNA transform: {transform!r} (use 'tpm' or 'log2')")
+
+
+def _robust_z(log_tpm: pd.Series) -> pd.Series:
+    """
+    Gene-wise robust z-score across cell lines: (x - median) / (1.4826 * MAD).
+    If MAD is 0 (most cell lines tie, e.g. TPM = 0) fall back to the standard
+    deviation; if the gene is constant, every z is 0.
+    """
+    med = log_tpm.median()
+    scale = (log_tpm - med).abs().median() * 1.4826
+    if not np.isfinite(scale) or scale == 0:
+        scale = log_tpm.std(ddof=0)
+    if not np.isfinite(scale) or scale == 0:
+        return pd.Series(0.0, index=log_tpm.index)
+    return (log_tpm - med) / scale
+
+
+def _mad_is_zero(values: pd.Series) -> bool:
+    """True when MAD = 0, i.e. the robust z had to fall back to the SD."""
+    vals = values.dropna()
+    if len(vals) == 0:
+        return False
+    return bool((vals - vals.median()).abs().median() == 0)
+
+
+def robust_z_with_flag(values: pd.Series) -> tuple[pd.Series, bool]:
+    """Robust z of `values` plus whether MAD = 0 (SD fallback), for reuse (protein)."""
+    return _robust_z(values), _mad_is_zero(values)
+
+
+def get_rna_consensus(
+    ensembl_id: str,
+    enabled_sources: list[str] | None = None,
+    transform: str | None = None,
+) -> pd.DataFrame:
+    """
+    One provenance-aware RNA signal per cell line.
+
+    Per source: prepare TPM (see RNA_TRANSFORM) -> gene-wise robust z-score across cell lines.
+      consensus   = mean of the matched robust z-scores (sources that cover the cell line)
+      coverage    = number of sources used
+      discordance = |z_depmap - z_hpa| when 2+ sources cover the cell line, else NaN
+                    (QC only: it never changes the score or the ranking)
+
+    Returns a DataFrame indexed by ach_id with columns
+    consensus, coverage, discordance and z_<source> for each source used.
+    df.attrs["mad_zero_sources"] lists the sources where MAD = 0 for this gene
+    (z then used the SD instead; surfaced to the user as a flag).
+    """
+    transform = transform or RNA_TRANSFORM
+    zcols: dict[str, pd.Series] = {}
+    mad_zero_sources: list[str] = []
+    for name, table in RNA_SOURCE_TABLES.items():
+        if enabled_sources is not None and name not in enabled_sources:
+            continue
+        df = get_expression_for_gene(ensembl_id, table)
+        if len(df) < 2:
+            continue
+        tpm = df.set_index("ach_id")["tpm"].astype(float)
+        prepared = _prepare(tpm, transform)
+        if _mad_is_zero(prepared):
+            mad_zero_sources.append(name)
+        zcols[f"z_{name}"] = _robust_z(prepared)
+
+    if not zcols:
+        empty = pd.DataFrame(columns=_RNA_SIGNAL_COLUMNS, dtype=float)
+        empty.attrs["mad_zero_sources"] = []
+        return empty
+
+    zmat = pd.DataFrame(zcols)
+    coverage = zmat.notna().sum(axis=1)
+    spread = zmat.max(axis=1) - zmat.min(axis=1)
+    out = pd.DataFrame({
+        "consensus": zmat.mean(axis=1, skipna=True),
+        "coverage": coverage,
+        "discordance": spread.where(coverage >= 2),
+    })
+    result = pd.concat([out, zmat], axis=1)
+    result.attrs["mad_zero_sources"] = mad_zero_sources
+    return result
+
+
+# ── GEO support (extra evidence only, never part of the score) ──
+# GEO samples come from different studies with different processing, so they are
+# NOT pooled. For each study a gene-wise robust z is computed *within that study*
+# (same transform and robust z as the RNA consensus). A cell line is "supportive"
+# in a study when its z points the way the user asked for.
+GEO_MIN_STUDY_SAMPLES = 10   # a study needs at least this many samples for the gene
+GEO_SUPPORT_Z = 1.0          # z >= +1 (HIGH) / <= -1 (LOW) supports; the opposite contradicts
+
+_GEO_MAP_CACHE: pd.DataFrame | None = None
+_GEO_Z_CACHE: dict[str, pd.DataFrame] = {}   # per-gene results (ranking + detail panel ask for the same gene)
+_GEO_Z_CACHE_MAX = 64
+_GEO_COLUMNS = ["ach_id", "gse_id", "z", "n_samples"]
+
+
+def _geo_study_map() -> pd.DataFrame | None:
+    """GSM -> GSE map (dim_geo_samples.parquet). None if it has not been built."""
+    global _GEO_MAP_CACHE
+    if _GEO_MAP_CACHE is not None:
+        return _GEO_MAP_CACHE
+    try:
+        df = query_df(
+            """
+            SELECT CAST(gsm_id AS VARCHAR) AS gsm_id, CAST(gse_id AS VARCHAR) AS gse_id
+            FROM dim_geo_samples
+            """
+        )
+    except Exception:
+        return None
+    _GEO_MAP_CACHE = df.dropna().drop_duplicates("gsm_id")
+    return _GEO_MAP_CACHE
+
+
+def _geo_samples_for_gene(ensembl_id: str) -> pd.DataFrame:
+    """One TPM value per GEO sample (GSM) for a gene."""
+    return query_df(
+        """
+        SELECT CAST(ach_id AS VARCHAR) AS ach_id,
+               CAST(GSM_ID AS VARCHAR) AS gsm_id,
+               tpm
+        FROM fact_expression_geo
+        WHERE CAST(ensembl_id AS VARCHAR) = ?
+        """,
+        [ensembl_id],
+    )
+
+
+def get_geo_study_z(ensembl_id: str) -> pd.DataFrame | None:
+    """
+    Per (cell line, study) robust z of the gene, computed within each study.
+    Columns: ach_id, gse_id, z, n_samples (samples in that study). Studies with
+    fewer than GEO_MIN_STUDY_SAMPLES samples are skipped; a cell line with
+    several samples in one study gets their mean z. Samples without a study are
+    ignored. Returns None when the GEO data / study map is not available.
+    """
+    study_map = _geo_study_map()
+    if study_map is None:
+        return None
+    if ensembl_id in _GEO_Z_CACHE:
+        return _GEO_Z_CACHE[ensembl_id]
+    try:
+        samples = _geo_samples_for_gene(ensembl_id)
+    except Exception:
+        return None
+    empty = pd.DataFrame(columns=_GEO_COLUMNS)
+    if samples.empty:
+        return empty
+
+    df = samples.dropna(subset=["tpm"]).merge(study_map, on="gsm_id", how="inner")
+    df = df.groupby(["gse_id", "gsm_id", "ach_id"], as_index=False)["tpm"].mean()
+    rows = []
+    for gse, g in df.groupby("gse_id"):
+        g = g.drop_duplicates("gsm_id")
+        if len(g) < GEO_MIN_STUDY_SAMPLES:
+            continue
+        z = _robust_z(pd.Series(_prepare(g["tpm"], RNA_TRANSFORM).to_numpy(), index=g["gsm_id"].to_numpy()))
+        per_cl = g.assign(z=z.reindex(g["gsm_id"]).to_numpy()).groupby("ach_id")["z"].mean()
+        rows.append(pd.DataFrame({
+            "ach_id": per_cl.index, "gse_id": gse, "z": per_cl.to_numpy(), "n_samples": len(g),
+        }))
+    result = pd.concat(rows, ignore_index=True) if rows else empty
+    if len(_GEO_Z_CACHE) >= _GEO_Z_CACHE_MAX:
+        _GEO_Z_CACHE.pop(next(iter(_GEO_Z_CACHE)))
+    _GEO_Z_CACHE[ensembl_id] = result
+    return result
+
+
+def geo_verdict(z: float, direction: str) -> str:
+    """One study: supportive / contradictory / neutral for the requested direction."""
+    s = z if direction == "high" else -z
+    if s >= GEO_SUPPORT_Z:
+        return "supportive"
+    if s <= -GEO_SUPPORT_Z:
+        return "contradictory"
+    return "neutral"
+
+
+def classify_geo(study_z: pd.DataFrame, direction: str) -> pd.DataFrame:
+    """
+    One row per cell line with GEO data: geo_supportive / geo_contradictory /
+    geo_total (studies) and geo_status:
+      supportive     more studies support than contradict, and at least half support
+      contradictory  more studies contradict than support, and at least half contradict
+      mixed          anything else (including studies that are neutral)
+    """
+    cols = ["geo_status", "geo_supportive", "geo_contradictory", "geo_total"]
+    if study_z is None or study_z.empty:
+        return pd.DataFrame(columns=cols)
+    s = study_z["z"] if direction == "high" else -study_z["z"]
+    d = pd.DataFrame({
+        "ach_id": study_z["ach_id"],
+        "sup": (s >= GEO_SUPPORT_Z).astype(int),
+        "con": (s <= -GEO_SUPPORT_Z).astype(int),
+    })
+    agg = d.groupby("ach_id").agg(
+        geo_supportive=("sup", "sum"), geo_contradictory=("con", "sum"), geo_total=("sup", "size"),
+    )
+    sup, con, tot = agg["geo_supportive"], agg["geo_contradictory"], agg["geo_total"]
+    agg["geo_status"] = np.where(
+        (sup > con) & (sup * 2 >= tot), "supportive",
+        np.where((con > sup) & (con * 2 >= tot), "contradictory", "mixed"),
+    )
+    return agg[cols]
+
+
+def get_geo_support(ensembl_id: str, direction: str):
+    """(per-cell-line summary, per-study z table) or None if GEO data is not available."""
+    study_z = get_geo_study_z(ensembl_id)
+    if study_z is None:
+        return None
+    return classify_geo(study_z, direction), study_z
+
+
+def geo_summary_for_cell_line(summary: pd.DataFrame, ach_id: str) -> dict:
+    """Plain dict for one cell line; 'unavailable' when it has no usable GEO study."""
+    if ach_id not in summary.index:
+        return {"status": "unavailable", "supportive": 0, "contradictory": 0, "total": 0}
+    r = summary.loc[ach_id]
+    return {
+        "status": str(r["geo_status"]),
+        "supportive": int(r["geo_supportive"]),
+        "contradictory": int(r["geo_contradictory"]),
+        "total": int(r["geo_total"]),
+    }
+
+
 # ── Protein queries ───────────────────────────────────────────
 
 def get_protein_for_gene(ensembl_id: str):
@@ -385,7 +640,6 @@ def get_full_dim() -> pd.DataFrame:
 EXPRESSION_SOURCES = [
     ("DepMap", "fact_expression_depmap"),
     ("HPA",    "fact_expression_hpa"),
-    ("GEO",    "fact_expression_geo"),
 ]
 
 
@@ -438,8 +692,8 @@ def get_evidence_for_cell_line(
             "expression_total": 0,
         }
 
-        # Per-source scoring
-        rank_dict = {}
+        # Per-source details (shown for provenance only; the overall expression
+        # rank below uses the single RNA consensus)
         for src_name, src_table in EXPRESSION_SOURCES:
             df = get_expression_for_gene(ensg, src_table)
             if len(df) < 2:
@@ -474,10 +728,6 @@ def get_evidence_for_cell_line(
             pct_rank_raw = pct_rank_series[ach_id]
             pct_rank = int(pct_rank_raw) if pd.notna(pct_rank_raw) else None
 
-            # For RRF ensemble
-            rank_dict[f"{src_name}_zscore"] = z_rank_series
-            rank_dict[f"{src_name}_percentile"] = pct_rank_series
-
             gene_data["sources"].append({
                 "source": src_name,
                 "tpm": round(tpm_val, 2),
@@ -492,24 +742,54 @@ def get_evidence_for_cell_line(
         if gene_data["source_count"] > total_rna_sources:
             total_rna_sources = gene_data["source_count"]
 
-        # Compute overall expression rank via RRF
-        if rank_dict:
-            all_ids = set()
-            for s in rank_dict.values():
-                all_ids.update(s.index)
-
-            rrf_scores = pd.Series(0.0, index=list(all_ids))
-            for ranks in rank_dict.values():
-                for idx in ranks.index:
-                    rank_val = ranks[idx]
-                    if pd.notna(rank_val):
-                        rrf_scores[idx] += 1.0 / (RRF_K + rank_val)
-
+        # Overall expression rank from the single RNA consensus (DepMap + HPA collapsed)
+        signal = get_rna_consensus(ensg)
+        if len(signal) >= 2 and ach_id in signal.index:
+            consensus = signal["consensus"]
+            # The rank only depends on the order of the consensus z, which is the
+            # same for every scoring method.
+            rank_c = consensus.rank(ascending=ascending, method="min")
+            rrf_scores = 2.0 / (RRF_K + rank_c)
             rrf_ranked = rrf_scores.rank(ascending=False, method="min")
-            if ach_id in rrf_ranked.index:
-                rrf_val = rrf_ranked[ach_id]
-                gene_data["expression_rank"] = int(rrf_val) if pd.notna(rrf_val) else None
-                gene_data["expression_total"] = len(rrf_ranked)
+            rrf_val = rrf_ranked[ach_id]
+            gene_data["expression_rank"] = int(rrf_val) if pd.notna(rrf_val) else None
+            gene_data["expression_total"] = len(rrf_ranked)
+
+            # Consensus value + discordance QC for this cell line
+            row = signal.loc[ach_id]
+            disc = row["discordance"]
+            gene_data["rna_consensus"] = {
+                "z": round(float(row["consensus"]), 2),
+                "discordance": round(float(disc), 2) if pd.notna(disc) else None,
+                "sources_used": int(row["coverage"]),
+                # sources covering this cell line where MAD = 0 (SD fallback)
+                "mad_zero_sources": [
+                    RNA_SOURCE_LABELS.get(s, s)
+                    for s in signal.attrs.get("mad_zero_sources", [])
+                    if pd.notna(row.get(f"z_{s}"))
+                ],
+            }
+            # Per-source robust z (provenance)
+            for src in gene_data["sources"]:
+                zc = f"z_{src['source'].lower()}"
+                if zc in signal.columns and pd.notna(row.get(zc)):
+                    src["robust_z"] = round(float(row[zc]), 2)
+
+        # GEO support (extra evidence; does not change score or rank)
+        geo = get_geo_support(ensg, direction)
+        if geo is not None:
+            geo_summary, geo_studies = geo
+            gene_data["geo"] = geo_summary_for_cell_line(geo_summary, ach_id)
+            mine = geo_studies[geo_studies["ach_id"] == ach_id].sort_values("gse_id")
+            gene_data["geo"]["studies"] = [
+                {
+                    "gse_id": str(r.gse_id),
+                    "z": round(float(r.z), 2),
+                    "n_samples": int(r.n_samples),
+                    "verdict": geo_verdict(float(r.z), direction),
+                }
+                for r in mine.itertuples()
+            ]
 
         # Mutations for this gene + cell line
         gene_muts = get_mutations_for_gene(ensg)
@@ -546,6 +826,10 @@ def get_evidence_for_cell_line(
                     z_rank_raw = z_rank_series[ach_id]
                     z_rank = int(z_rank_raw) if pd.notna(z_rank_raw) else None
 
+                    # Robust z (what the protein score is computed from) + MAD=0 flag
+                    rz_series, prot_mad_zero = robust_z_with_flag(intensity_series.astype(float))
+                    rz_val = float(rz_series[ach_id])
+
                     # Percentile
                     pct_series = intensity_series.rank(pct=True, method="average")
                     pct_val = float(pct_series[ach_id]) * 100
@@ -559,6 +843,8 @@ def get_evidence_for_cell_line(
                         "intensity": round(intensity_val, 2),
                         "z_score": round(z_val, 2) if pd.notna(z_val) else None,
                         "z_rank": z_rank,
+                        "robust_z": round(rz_val, 2) if pd.notna(rz_val) else None,
+                        "mad_zero": prot_mad_zero,
                         "percentile": round(pct_val, 1) if pd.notna(pct_val) else None,
                         "pct_rank": pct_rank,
                         "rank": z_rank,
@@ -572,8 +858,9 @@ def get_evidence_for_cell_line(
     # Data coverage
     has_mutations = len(all_mutations) > 0
     has_fusions = len(all_fusions) > 0
-    total_types = total_rna_sources + (1 if has_protein else 0) + (1 if has_mutations else 0)
-    max_types = 3 + 1 + 1  # 3 RNA sources + protein + mutations
+    # RNA counts as ONE evidence type (DepMap + HPA are collapsed into one consensus)
+    total_types = (1 if total_rna_sources > 0 else 0) + (1 if has_protein else 0) + (1 if has_mutations else 0)
+    max_types = 1 + 1 + 1  # RNA consensus + protein + mutations
 
     result["data_coverage"] = {
         "rna_sources": total_rna_sources,
