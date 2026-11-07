@@ -177,7 +177,7 @@ export default function App() {
           <div className={styles.logo}>
             Cell<span className={styles.logoAccent}>Line</span>Finder
           </div>
-          <span className={styles.headerTag}>v2.1 · Bristol × AstraZeneca</span>
+          <span className={styles.headerTag}>v3.0 · Bristol × AstraZeneca</span>
         </div>
         <div className={styles.headerRight}>
           <button className={styles.headerLink} onClick={() => setDocsTab("docs")}>Documentation</button>
@@ -255,7 +255,11 @@ export default function App() {
                 </button>
                 <span className={styles.resultsMeta}>
                   Showing <b>{displayedResults.length}</b> cell lines · Ranked by{" "}
-                  <b>Z-Score + Percentile RRF</b>
+                  <b>
+                    {/* Backend defaults: scoring_method=robust_z, multi_gene_method=geometric */}
+                    Robust Z-Score
+                    {lastSearchedGenes?.length > 1 && " + Geometric Mean"}
+                  </b>
                 </span>
               </div>
             </div>
