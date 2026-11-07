@@ -31,11 +31,21 @@ Base case: one or more genes, each with a direction (HIGH or LOW).
 2. **Protein**: the same robust z-score.
 3. **Score (0 to 1)**: `asinh(z)` scaled to 0 to 1. RNA and protein are combined 0.7 / 0.3 (RNA only is capped at 0.7).
 4. **Several genes**: each gene gives a 0 to 1 score (LOW genes are flipped: `1 - score`). They are combined with a weighted geometric mean `exp( sum(w * log(D + eps)) / sum(w) )`, `eps = 0.000001`, equal weights by default. A cell line with no data for a gene is scored on the other genes and flagged.
-5. **GEO** is never pooled. The detail panel shows support per study (studies with at least 10 samples, |z| >= 1). It does not change score or rank.
+5. **GEO** is never pooled. The detail panel shows support per study (studies with at least 10 samples, |z| >= 1). It does not change score or rank. A request that still sends `"geo"` in `sources` gets a warning in the response and GEO is ignored.
+6. **Ties** (common for LOW searches and constant genes) are ordered by `ach_id`, so the same query always gives the same order. Every `/api/rank` response includes `query.scoring_version`.
 
 The older methods (`rrf`, `zscore`, `percentile`, and summed RRF for several genes) can still be selected with the API fields `scoring_method` and `multi_gene_method`.
 
 Check the multi-gene rule against 6 scenarios (no database needed): `python backend_api/compare_multigene.py`
+
+Compare v3 with the frozen v2.1 ranking on a benchmark suite with positive controls (needs the data): `cd backend_api && python compare_v2_v3.py --markdown ../docs/benchmarks/<date>.md`. The latest record is in [docs/benchmarks/](docs/benchmarks/).
+
+Run the tests (unit tests use synthetic data; API tests run on the real Parquet files and are skipped without them):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest backend_api/tests
+```
 
 ---
 
@@ -58,7 +68,9 @@ Scope so far: gene + direction only. The mutation, fusion, MSI/CIN, metabolite a
 
 **Decisions not yet confirmed with the advisor:** asinh + min-max to map z to 0 to 1; protein also uses robust z; SD fallback when MAD = 0; GEO thresholds (at least 10 samples, |z| >= 1, majority rule); skip a gene with no data and renormalise the weights; `eps = 0.000001`.
 
-**Not yet checked on real data:** web results after the switch to log2 (for example EGFR); genes with MAD = 0, especially LOW searches where many cell lines tie; old vs new top 20 for several real genes.
+**Checked on real data:** old (v2.1) vs new rankings for 6 benchmark queries with positive controls, in [docs/benchmarks/2026-11-07_az_revision_v2_vs_v3.md](docs/benchmarks/2026-11-07_az_revision_v2_vs_v3.md). It shows that cell lines without protein data (e.g. SKBR3, BT474, A431) drop well down because "RNA only" is capped at 0.7 (priority 6).
+
+**Not yet checked on real data:** web results after the switch to log2 (for example EGFR); genes with MAD = 0 beyond the tie order (LOW searches still give many tied scores, priority 5).
 
 ---
 
