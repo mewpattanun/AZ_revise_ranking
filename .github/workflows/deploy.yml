@@ -3,7 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches:
-      - mew/ranking-v2
+      - main
 
 jobs:
   deploy:
@@ -19,10 +19,13 @@ jobs:
           script: |
             cd /home/ubuntu/celllinefinder
 
-            # Pull latest code
-            git fetch origin mew/ranking-v2
-            git checkout mew/ranking-v2
-            git pull origin mew/ranking-v2
+            # Pull latest code. reset --hard (not pull) so files the build
+            # rewrites on the server (frontend/dist/index.html,
+            # package-lock.json) can never block the update. Untracked
+            # files (data, .env, venv, node_modules) are not touched.
+            git fetch origin main
+            git checkout main
+            git reset --hard origin/main
 
             # Backend: install any new dependencies
             source backend_api/venv/bin/activate
@@ -39,6 +42,6 @@ jobs:
             sudo systemctl restart celllinefinder
 
             # Verify
-            sleep 3
+            sleep 10
             curl -sf http://localhost:8000/health || echo "WARNING: Backend health check failed"
             echo "Deployment complete!"
