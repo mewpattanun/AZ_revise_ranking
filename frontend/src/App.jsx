@@ -8,6 +8,7 @@ import ChatWidget from "./components/ChatWidget/ChatWidget.jsx";
 import DocsModal from "./components/DocsModal/DocsModal.jsx";
 import { rankCellLines } from "./api";
 import { exportResultsCsv } from "./exportCsv";
+import { VERSION_LABEL, GIT_COMMIT, BUILD_DATE } from "./version";
 import styles from "./App.module.css";
 
 const DEFAULT_FILTERS = {
@@ -47,6 +48,9 @@ export default function App() {
   const [lastSearchedFilters, setLastSearchedFilters] = useState(null);
   // Genes at the time of the last successful search — same purpose.
   const [lastSearchedGenes, setLastSearchedGenes] = useState(null);
+  // Backend scoring version from the last /api/rank response (shown in the
+  // version badge tooltip; older backends do not send it).
+  const [scoringVersion, setScoringVersion] = useState(null);
 
   /* Selection & panels */
   const [selected, setSelected] = useState([]);
@@ -102,6 +106,7 @@ export default function App() {
 
       const res = await rankCellLines(apiParams);
       setResults(res.results);
+      setScoringVersion(res.query?.scoring_version ?? null);
       setLastSearchedFilters(filters);
       setLastSearchedGenes(genes);
     } catch (err) {
@@ -177,7 +182,15 @@ export default function App() {
           <div className={styles.logo}>
             Cell<span className={styles.logoAccent}>Line</span>Finder
           </div>
-          <span className={styles.headerTag}>v3.0 · Bristol × AstraZeneca</span>
+          <span
+            className={styles.headerTag}
+            title={
+              `Website ${VERSION_LABEL}\nCommit ${GIT_COMMIT}\nBuilt ${BUILD_DATE}` +
+              (scoringVersion ? `\nScoring ${scoringVersion}` : "\nScoring version: run a search to see it")
+            }
+          >
+            {VERSION_LABEL} · {GIT_COMMIT} · Bristol × AstraZeneca
+          </span>
         </div>
         <div className={styles.headerRight}>
           <button className={styles.headerLink} onClick={() => setDocsTab("docs")}>Documentation</button>
