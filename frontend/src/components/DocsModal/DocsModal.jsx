@@ -362,7 +362,7 @@ function AboutContent() {
     <div className={styles.content}>
       <h3>About CellLineFinder</h3>
       <p>
-        CellLineFinder v2.0 is a multi-omics cell line recommendation platform
+        CellLineFinder v3.0 is a multi-omics cell line recommendation platform
         developed as a collaborative project between the University of Bristol
         and AstraZeneca. The platform helps cancer researchers identify the most
         appropriate cell lines for their experimental needs by integrating and
