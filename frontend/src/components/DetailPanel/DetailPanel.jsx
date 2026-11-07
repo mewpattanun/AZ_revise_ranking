@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { getCellLineEvidence, getSimilarCellLines } from "../../api";
 import styles from "./DetailPanel.module.css";
 
@@ -319,7 +319,7 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                     {/* GEO support card: extra evidence only, not part of the score or rank.
                         Only present when the GSM -> study map has been built. */}
                     {gd.geo && (
-                      <div className={styles.sourceCard}>
+                      <div className={`${styles.sourceCard} ${styles.geoCard}`}>
                         <h5 className={styles.sourceTitle}>GEO support</h5>
                         <div className={styles.sourceRow}>
                           <span>Status</span>
@@ -344,15 +344,33 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                             <span className={styles.val}>—</span>
                           </div>
                         )}
-                        {gd.geo.studies?.map((s) => (
-                          <div key={s.gse_id} className={styles.sourceRow}>
-                            <span>{s.gse_id} (n={s.n_samples})</span>
-                            <span className={styles.val}>
-                              {s.z > 0 ? "+" : ""}{s.z}{" "}
-                              {s.verdict === "supportive" ? "✓" : s.verdict === "contradictory" ? "✗" : "~"}
-                            </span>
+                        {gd.geo.studies?.length > 0 && (
+                          // One aligned row per study: study | samples | z | verdict
+                          <div className={styles.geoTable}>
+                            <span className={styles.geoHead}>Study</span>
+                            <span className={`${styles.geoHead} ${styles.geoNum}`}>Samples</span>
+                            <span className={`${styles.geoHead} ${styles.geoNum}`}>Robust Z</span>
+                            <span className={`${styles.geoHead} ${styles.geoNum}`}>Verdict</span>
+                            {gd.geo.studies.map((s) => {
+                              const verdict =
+                                s.verdict === "supportive" ? { mark: "✓", label: "Supports", color: "#2d6a4f" }
+                                : s.verdict === "contradictory" ? { mark: "✗", label: "Contradicts", color: "#b02a37" }
+                                : { mark: "~", label: "Neutral", color: "#856404" };
+                              return (
+                                <Fragment key={s.gse_id}>
+                                  <span className={styles.geoStudy}>{s.gse_id}</span>
+                                  <span className={styles.geoNum}>{s.n_samples}</span>
+                                  <span className={`${styles.geoNum} ${styles.val}`}>
+                                    {s.z > 0 ? "+" : ""}{s.z}
+                                  </span>
+                                  <span className={styles.geoNum} style={{ color: verdict.color, fontWeight: 600 }}>
+                                    {verdict.mark} {verdict.label}
+                                  </span>
+                                </Fragment>
+                              );
+                            })}
                           </div>
-                        ))}
+                        )}
                         <div className={styles.geneCardSub} style={{ marginTop: 6 }}>
                           Not used in the score or rank.
                         </div>
