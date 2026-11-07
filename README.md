@@ -243,7 +243,7 @@ Additional similarity matrices (`sim_expression.parquet`, `sim_proteomics.parque
 
 The application is deployed on a single Amazon EC2 instance (`t3.medium`, Ubuntu 22.04). Nginx serves the compiled React frontend as static files and reverse-proxies `/api` requests to the FastAPI backend running under systemd/Uvicorn. HTTPS is provided by Certbot (Let's Encrypt).
 
-A GitHub Actions workflow (`.github/workflows/deploy.yml`) triggers on every push to `mew/ranking-v2`: it connects over SSH, pulls the latest code, rebuilds dependencies, restarts the service, and runs a health check.
+A GitHub Actions workflow (`.github/workflows/deploy.yml`) triggers on every push to `main` (including merged pull requests): it connects over SSH, pulls the latest code, rebuilds dependencies, restarts the service, and runs a health check.
 
 See `docs/deploy_ec2.md` for the full step-by-step deployment guide.
 
