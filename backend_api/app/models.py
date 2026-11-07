@@ -98,6 +98,7 @@ class RankResponse(BaseModel):
     query: dict
     total_results: int
     results: list[RankedCellLine]
+    warnings: list[str] = []
 
 
 class SourceScore(BaseModel):

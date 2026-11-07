@@ -41,6 +41,10 @@ DEFAULT_W_PROTEIN = 0.3
 DEFAULT_TOP_N = 20
 RRF_K = 60
 
+# Echoed in every /api/rank response so exported results can be traced back
+# to the scoring method that produced them. Bump when scoring changes.
+SCORING_VERSION = "3.0.0.dev2"
+
 # ── Server ───────────────────────────────────────────────────
 API_HOST = os.getenv("CLF_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("CLF_PORT", "8000"))
