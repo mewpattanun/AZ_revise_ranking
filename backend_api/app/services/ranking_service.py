@@ -79,6 +79,18 @@ def _rrf(rank_dict: dict[str, pd.Series], k: int = RRF_K, average: bool = False)
     return scores
 
 
+def _sort_by_score(df: pd.DataFrame, score_col: str, ascending: bool) -> pd.DataFrame:
+    """
+    Sort by score with ties broken by ach_id, so the same query always gives
+    the same order. Without this, tied cell lines follow DuckDB's (unordered)
+    row order. Ties are common: "low" searches put many cell lines at the
+    floor, and a constant gene gives every cell line the same score.
+    """
+    return df.sort_values(
+        [score_col, "ach_id"], ascending=[ascending, True], kind="mergesort"
+    ).reset_index(drop=True)
+
+
 def _norm01(s: pd.Series) -> pd.Series:
     """Min-max normalise to [0, 1]."""
     if len(s) == 0:
@@ -92,6 +104,9 @@ def _norm01(s: pd.Series) -> pd.Series:
 # ── Expression ranking for one gene ──────────────────────────
 
 SCORING_METHODS = ("robust_z", "rrf", "zscore", "percentile")
+
+# RNA sources that feed the score. GEO is evidence only and never scored.
+SCORING_SOURCE_NAMES = list(data_service.RNA_SOURCE_TABLES)
 
 
 def magnitude_score(consensus: pd.Series) -> pd.Series:
@@ -251,7 +266,9 @@ def combine_rna_protein(
             "coverage_confidence": confidence,
         })
 
-    return pd.DataFrame(rows)
+    # Explicit columns: a gene with no usable data must give an empty table
+    # (the caller returns no results), not a column-less frame that crashes.
+    return pd.DataFrame(rows, columns=["ach_id", "combined_score", "scenario", "coverage_confidence"])
 
 
 # ── Multi-gene fusion ────────────────────────────────────────
@@ -416,11 +433,14 @@ def run_ranking(
     # inverted (1 - score). Single-gene search and summed RRF keep the old scores.
     invert_low = len(genes) > 1 and multi_gene_method == "geometric"
 
+    # Only scoring RNA sources are used; "geo" and "protein" are dropped.
+    # Selecting no scoring source (e.g. only "geo") means all of them.
+    rna_sources = [s for s in (sources or []) if s in SCORING_SOURCE_NAMES] or SCORING_SOURCE_NAMES
+
     for gene in genes:
         ensg = gene["ensembl_id"]
 
         # 1. Expression score from the RNA consensus (only selected RNA sources)
-        rna_sources = [s for s in (sources or ["depmap", "hpa"]) if s != "protein"]
         signal = data_service.get_rna_consensus(ensg, rna_sources)
         expr_rrf = score_expression(signal, scoring_method)
         coverage = signal["coverage"].astype(int) if len(signal) >= 2 else pd.Series(dtype=int)
@@ -450,7 +470,7 @@ def run_ranking(
         gene = genes[0]
         final_df = combined_per_gene[gene["hugo"]].copy()
         ascending = gene["direction"] == "low"
-        final_df = final_df.sort_values("combined_score", ascending=ascending).reset_index(drop=True)
+        final_df = _sort_by_score(final_df, "combined_score", ascending)
         final_df["final_rank"] = range(1, len(final_df) + 1)
         final_df["final_score"] = final_df["combined_score"]
     else:
@@ -460,7 +480,7 @@ def run_ranking(
             df_g = combined_per_gene[gene["hugo"]].copy()
             # rank 1 = best for the requested direction (display + summed RRF)
             ascending = gene["direction"] == "low" and not invert_low
-            df_g = df_g.sort_values("combined_score", ascending=ascending).reset_index(drop=True)
+            df_g = _sort_by_score(df_g, "combined_score", ascending)
             df_g["gene_rank"] = range(1, len(df_g) + 1)
             gene_ranks[gene["hugo"]] = df_g.set_index("ach_id")["gene_rank"]
             desirability[gene["hugo"]] = df_g.set_index("ach_id")["combined_score"]
@@ -497,8 +517,10 @@ def run_ranking(
                 ],
             })
 
-        final_df = pd.DataFrame(rows)
-        final_df = final_df.sort_values("final_score", ascending=False).reset_index(drop=True)
+        final_df = pd.DataFrame(
+            rows, columns=["ach_id", "final_score", "coverage_confidence", "scenario", "genes_skipped"]
+        )
+        final_df = _sort_by_score(final_df, "final_score", ascending=False)
         final_df["final_rank"] = range(1, len(final_df) + 1)
 
     if final_df.empty:
@@ -525,12 +547,14 @@ def run_ranking(
         if subtype_filter and (cl.get("subtype") or "").lower() != subtype_filter.lower():
             continue
 
-        # Core only: require data in all expression sources (for first gene)
+        # Core only: require data in every SELECTED RNA source (for first gene).
+        # Comparing with all sources made core_only return nothing when the
+        # user picked a single source, since coverage can then be at most 1.
         is_core = False
         first_hugo = genes[0]["hugo"]
         if first_hugo in coverage_per_gene:
             cov = coverage_per_gene[first_hugo]
-            is_core = row["ach_id"] in cov.index and cov[row["ach_id"]] >= len(data_service.RNA_SOURCE_TABLES)
+            is_core = bool(row["ach_id"] in cov.index and cov[row["ach_id"]] >= len(rna_sources))
 
         if core_only and not is_core:
             continue
