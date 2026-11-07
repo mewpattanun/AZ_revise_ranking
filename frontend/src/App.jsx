@@ -189,7 +189,8 @@ export default function App() {
               (scoringVersion ? `\nScoring ${scoringVersion}` : "\nScoring version: run a search to see it")
             }
           >
-            {VERSION_LABEL} · {GIT_COMMIT} · Bristol × AstraZeneca
+            {/* Commit hash and build date are in the tooltip (hover) */}
+            {VERSION_LABEL} · Bristol × AstraZeneca
           </span>
         </div>
         <div className={styles.headerRight}>
