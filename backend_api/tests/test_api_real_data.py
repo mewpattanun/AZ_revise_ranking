@@ -85,3 +85,46 @@ def test_evidence_has_per_study_geo_and_no_geo_score(client):
         assert egfr["geo"]["status"] in {"supportive", "contradictory", "mixed", "unavailable"}
         for s in egfr["geo"]["studies"]:
             assert s["verdict"] in {"supportive", "contradictory", "neutral"}
+
+
+# ── Low-expression mode (priority 5) ─────────────────────────
+
+OFF = {"below_detection", "negligible"}
+
+
+def test_low_esr1_off_mode_returns_off_lines_first(client):
+    body = _rank(client, genes=[{"hugo": "ESR1", "direction": "low"}], top_n=50)
+    assert body["query"]["low_expression"]["mode"] == "off"
+    assert body["query"]["low_expression"]["off_tpm"] == 1.0
+    for r in body["results"]:
+        info = r["expression"]["ESR1"]
+        assert info["category"] in OFF
+        assert all(v < 1.0 for v in info["tpm_by_source"].values())
+
+
+def test_low_esr1_measurable_mode_returns_1_to_3_tpm_first(client):
+    body = _rank(
+        client, genes=[{"hugo": "ESR1", "direction": "low"}], low_expression_mode="measurable", top_n=10
+    )
+    for r in body["results"]:
+        info = r["expression"]["ESR1"]
+        assert info["category"] == "low_measurable"
+        assert not info["sources_disagree"]
+        assert all(1.0 <= v <= 3.0 for v in info["tpm_by_source"].values())
+
+
+@pytest.mark.parametrize("gene, ach_id, expected", [
+    ("ESR1", "ACH-000768", "below_detection"),   # MDA-MB-231, ER-negative
+    ("PTEN", "ACH-000090", "negligible"),        # PC3, PTEN deleted
+    ("CDKN2A", "ACH-000681", "negligible"),      # A549, CDKN2A deleted
+    ("ESR1", "ACH-000019", "moderate"),          # MCF7, ER-positive
+    # Known limitation: HCC1954 is ER-negative but has ~3 TPM ESR1 RNA, so a
+    # fixed TPM cutoff cannot call it off (needs a gene-relative rule).
+    ("ESR1", "ACH-000859", "moderate"),
+])
+def test_known_cell_lines_get_the_expected_category(gene, ach_id, expected):
+    from app.services import data_service
+
+    ensg = data_service.resolve_gene(gene)["ensembl_id"]
+    cats = data_service.classify_expression(data_service.get_rna_consensus(ensg))
+    assert cats.loc[ach_id, "category"] == expected

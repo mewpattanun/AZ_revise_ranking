@@ -33,6 +33,7 @@ Base case: one or more genes, each with a direction (HIGH or LOW).
 4. **Several genes**: each gene gives a 0 to 1 score (LOW genes are flipped: `1 - score`). They are combined with a weighted geometric mean `exp( sum(w * log(D + eps)) / sum(w) )`, `eps = 0.000001`, equal weights by default. A cell line with no data for a gene is scored on the other genes and flagged.
 5. **GEO** is never pooled. The detail panel shows support per study (studies with at least 10 samples, |z| >= 1). It does not change score or rank. A request that still sends `"geo"` in `sources` gets a warning in the response and GEO is ignored.
 6. **Ties** (common for LOW searches and constant genes) are ordered by `ach_id`, so the same query always gives the same order. Every `/api/rank` response includes `query.scoring_version`.
+7. **Low expression** (classify first, then rank): every cell line gets a category from raw TPM: below detection (< 0.1), negligible (< 1), low measurable (1 to 3) or moderate (> 3). The highest source decides, so a line is only off when DepMap and HPA agree. For a LOW gene, `low_expression_mode` sets the order: `off` (default) puts off lines first, tied on RNA; `measurable` puts 1 to 3 TPM first and off lines last; `score` is the old behaviour. Thresholds are in `config.py`, and the check against known negative cell lines is in [docs/benchmarks/2026-11-08_low_expression_thresholds.md](docs/benchmarks/2026-11-08_low_expression_thresholds.md).
 
 The older methods (`rrf`, `zscore`, `percentile`, and summed RRF for several genes) can still be selected with the API fields `scoring_method` and `multi_gene_method`.
 
@@ -60,7 +61,7 @@ Scope so far: gene + direction only. The mutation, fusion, MSI/CIN, metabolite a
 | 3 | Preserve magnitude (robust z, log2) | Done |
 | - | GEO support card | Done |
 | 4 | Weighted geometric mean for several genes | Done |
-| 5 | Detectable low expression | Not started |
+| 5 | Detectable low expression | Done (1 TPM off cutoff; gene-relative rule not done) |
 | 6 | Separate coverage | Not started |
 | 7 | Weight sensitivity | Not started |
 | 8 | Rename confidence | Not started |
@@ -70,7 +71,9 @@ Scope so far: gene + direction only. The mutation, fusion, MSI/CIN, metabolite a
 
 **Checked on real data:** old (v2.1) vs new rankings for 6 benchmark queries with positive controls, in [docs/benchmarks/2026-11-07_az_revision_v2_vs_v3.md](docs/benchmarks/2026-11-07_az_revision_v2_vs_v3.md). It shows that cell lines without protein data (e.g. SKBR3, BT474, A431) drop well down because "RNA only" is capped at 0.7 (priority 6).
 
-**Not yet checked on real data:** web results after the switch to log2 (for example EGFR); genes with MAD = 0 beyond the tie order (LOW searches still give many tied scores, priority 5).
+**Not yet checked on real data:** web results after the switch to log2 (for example EGFR); genes with MAD = 0 beyond the tie order.
+
+**Known issue (priority 6):** in LOW searches a cell line without protein data is still treated as if its protein were zero, so inside the off group RNA-only lines come before lines with measured protein.
 
 ---
 

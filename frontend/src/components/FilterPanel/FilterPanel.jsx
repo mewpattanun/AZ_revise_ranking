@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { getDiseases, getLineages, getDiseaseLineageMapping, getSubtypes, getDiseaseLineageSubtypeMapping } from "../../api";
 import styles from "./FilterPanel.module.css";
+import { LOW_EXPRESSION_MODES } from "../../expression";
 
 const MODE_OPTIONS = ["ignore", "include", "exclude"];
 
@@ -17,7 +18,7 @@ const DATA_SOURCES = [
   { key: "hpa", label: "HPA" },
 ];
 
-export default function FilterPanel({ filters, onChange }) {
+export default function FilterPanel({ filters, onChange, hasLowGene = false }) {
   const [allDiseases, setAllDiseases] = useState([]);
   const [allLineages, setAllLineages] = useState([]);
   const [allSubtypes, setAllSubtypes] = useState([]);
@@ -143,6 +144,29 @@ export default function FilterPanel({ filters, onChange }) {
 
       <div className={styles.grid}>
         {/* ── BASIC FILTERS (always visible) ── */}
+
+        {/* What "low" means — only when a gene is set to LOW (AZ priority 5) */}
+        {hasLowGene && (
+          <div className={styles.field}>
+            <label className={styles.label}>Low expression means</label>
+            <div className={styles.modeToggle}>
+              {LOW_EXPRESSION_MODES.map((m) => (
+                <button
+                  key={m.key}
+                  className={`${styles.modeBtn} ${styles.lowModeBtn} ${
+                    (filters.low_expression_mode || "off") === m.key ? styles.mode_include : ""
+                  }`}
+                  onClick={() => set("low_expression_mode", m.key)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            <span className={styles.hint}>
+              {LOW_EXPRESSION_MODES.find((m) => m.key === (filters.low_expression_mode || "off"))?.hint}
+            </span>
+          </div>
+        )}
 
         {/* Disease dropdown */}
         <div className={styles.field}>

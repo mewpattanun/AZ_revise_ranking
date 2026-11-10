@@ -7,6 +7,8 @@
  *    (mutations, fusions, assay, tissue match) when relevant filters were active.
  */
 
+import { categoryInfo } from "./expression";
+
 function escapeCsv(value) {
   if (value == null) return "";
   const str = String(value);
@@ -50,6 +52,12 @@ export function exportResultsCsv({ results, genes, filters }) {
     if (filters.lineage_filter) lines.push(`# Target lineage: ${filters.lineage_filter}`);
     if (filters.subtype_filter) lines.push(`# Target subtype: ${filters.subtype_filter}`);
   }
+  if (genes.some((g) => g.direction === "low")) {
+    const mode = filters.low_expression_mode || "off";
+    lines.push(
+      `# Low expression means: ${mode === "measurable" ? "TPM greater than 1 (lowest from 1 TPM upwards first)" : "TPM below 1 (< 1 TPM in every source first)"}`
+    );
+  }
   lines.push(`# Mutation filter: ${filters.mutation_mode}`);
   lines.push(`# Fusion filter: ${filters.fusion_mode}`);
   if (filters.assay_type) lines.push(`# Assay type: ${filters.assay_type}`);
@@ -83,6 +91,11 @@ export function exportResultsCsv({ results, genes, filters }) {
     "Scenario",
   ];
 
+  // Raw TPM and expression category per gene (AZ priority 5)
+  genes.forEach((g) => {
+    headers.push(`${g.hugo} DepMap TPM`, `${g.hugo} HPA TPM`, `${g.hugo} Expression`);
+  });
+
   if (showBoost) {
     headers.push("Base Score", "Match Level", "Q6 Score");
   }
@@ -106,6 +119,15 @@ export function exportResultsCsv({ results, genes, filters }) {
       r.score?.toFixed(4) ?? "",
       r.scenario || "",
     ];
+
+    genes.forEach((g) => {
+      const info = r.expression?.[g.hugo];
+      row.push(
+        info?.tpm_by_source?.depmap ?? "",
+        info?.tpm_by_source?.hpa ?? "",
+        info ? categoryInfo(info.category).label + (info.sources_disagree ? " (sources disagree)" : "") : ""
+      );
+    });
 
     if (showBoost) {
       row.push(

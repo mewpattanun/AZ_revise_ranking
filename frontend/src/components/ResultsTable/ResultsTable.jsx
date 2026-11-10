@@ -1,4 +1,29 @@
 import styles from "./ResultsTable.module.css";
+import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
+
+// Raw TPM + expression category for each searched gene (AZ priority 5)
+function ExpressionCell({ expression }) {
+  const entries = Object.entries(expression || {});
+  if (entries.length === 0) return <span style={{ color: "#bbb" }}>—</span>;
+  const multi = entries.length > 1;
+  return (
+    <div className={styles.exprList}>
+      {entries.map(([hugo, info]) => {
+        const cat = categoryInfo(info.category);
+        return (
+          <div key={hugo} className={styles.exprRow} title={expressionTooltip(info)}>
+            {multi && <span className={styles.exprGene}>{hugo}</span>}
+            <span className={styles.exprTpm}>{formatTpm(info)}</span>
+            <span className={styles.exprPill} style={{ color: cat.color, background: cat.bg }}>
+              {cat.label}
+              {info.sources_disagree && " ⚠"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ResultsTable({
   results,
@@ -176,6 +201,9 @@ export default function ResultsTable({
               <th>Cell Line</th>
               <th>Disease</th>
               <th>Score</th>
+              <th title="Mean TPM over DepMap and HPA, and the expression category (hover for each source)">
+                Expression
+              </th>
               {showMatchColumn && <th>Match</th>}
               <th>Scenario</th>
               {showMutationColumn && <th>Mutation</th>}
@@ -242,6 +270,9 @@ export default function ResultsTable({
                         </span>
                       )}
                     </div>
+                  </td>
+                  <td>
+                    <ExpressionCell expression={r.expression} />
                   </td>
                   {showMatchColumn && (
                     <td>{matchBadge(r.match_level)}</td>
