@@ -18,6 +18,12 @@ Pipeline:
      score down. The old summed RRF is still selectable (multi_gene_method).
   6. Optional post-filters (disease, lineage, core-only)
 
+Low-expression mode (AZ priority 5): every cell line gets an expression
+category from raw TPM (below detection / negligible / low measurable /
+moderate, see data_service.classify_expression). For LOW genes the category
+decides the order first ("classify first, then rank"): below 1 TPM all cell
+lines tie on RNA, so noise like 0.03 vs 0.05 TPM no longer orders them.
+
 Note on RRF averaging:
   When fusing the per-source expression ranks, we AVERAGE the RRF contributions
   (divide by the number of rank lists that actually cover each cell line) instead
@@ -32,7 +38,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from app.config import RRF_K
+from app.config import DEFAULT_LOW_EXPRESSION_MODE, LOW_EXPRESSION_MODES, RRF_K
 from app.services import data_service
 
 
@@ -180,6 +186,95 @@ def _gene_flags(signal: pd.DataFrame, prot_scores: pd.Series) -> dict[str, list[
     if prot_scores.attrs.get("mad_zero"):
         for ach in prot_scores.index:
             flags.setdefault(ach, []).append("Protein MAD=0 (SD used)")
+    return flags
+
+
+# ── Low-expression mode (AZ priority 5) ──────────────────────
+
+# Order of the categories for a LOW gene, per mode (lower tier = shown first).
+# "missing" = no RNA value (protein only) always comes last.
+_LOW_TIERS = {
+    "off": {"below_detection": 0, "negligible": 0, "low_measurable": 1, "moderate": 2},
+    "measurable": {"low_measurable": 0, "moderate": 2, "below_detection": 3, "negligible": 3},
+}
+_MISSING_TIER = 4
+
+
+def low_expression_tier(category: str | None, mode: str, sources_disagree: bool = False) -> int:
+    """
+    Sort tier of a cell line for a LOW gene (0 = best). Mode "score": no tiers.
+    In "measurable" mode a low measurable line where one source says off
+    (e.g. DepMap 1.4, HPA 0) is less certain, so it comes after the lines
+    where both sources agree.
+    """
+    if mode not in _LOW_TIERS:
+        return 0
+    tier = _LOW_TIERS[mode].get(category, _MISSING_TIER)
+    if mode == "measurable" and category == "low_measurable" and sources_disagree:
+        tier = 1
+    return tier
+
+
+def apply_low_expression_mode(expr: pd.Series, categories: pd.DataFrame, mode: str) -> pd.Series:
+    """
+    Set the RNA score of off cell lines (below 1 TPM in every source) for a LOW gene.
+
+      off        → all off cell lines share the best low score, so noise below
+                   1 TPM no longer orders them; protein can still separate them
+      measurable → all off cell lines share the worst score (being off is not
+                   what was asked for; in a multi-gene search this pulls the
+                   geometric mean down like any other failed gene)
+      score      → unchanged (old behaviour)
+
+    Works on any score where LOWER = more "low" (the score is then sorted
+    ascending, or inverted for the geometric mean).
+    """
+    if mode not in _LOW_TIERS or expr.empty or categories.empty:
+        return expr
+    is_off = categories["category"].isin(data_service.OFF_CATEGORIES)
+    off = categories.index[is_off].intersection(expr.index)
+    if len(off) == 0:
+        return expr
+    span = float(expr.max() - expr.min()) or 1.0
+    out = expr.astype(float).copy()
+    # Just outside the range of the other cell lines, so off lines are strictly
+    # first (or last) after the min-max scaling in combine_rna_protein.
+    if mode == "off":
+        out[off] = float(expr.min()) - 1e-6 * span
+    else:
+        out[off] = float(expr.max()) + 1e-6 * span
+    return out
+
+
+def _expression_info(categories: pd.DataFrame, ach_id: str) -> dict:
+    """Category and raw TPM of one cell line for one gene (shown in the results)."""
+    if ach_id not in categories.index:
+        return {"category": "missing", "tpm": None, "tpm_by_source": {}, "sources_disagree": False}
+    row = categories.loc[ach_id]
+    by_source = {
+        c[len("tpm_"):]: round(float(row[c]), 2)
+        for c in categories.columns
+        if c.startswith("tpm_") and pd.notna(row[c])
+    }
+    return {
+        "category": row["category"],
+        "tpm": round(float(row["tpm"]), 2),
+        "tpm_by_source": by_source,
+        "sources_disagree": bool(row["sources_disagree"]),
+    }
+
+
+def _disagree_flags(categories: pd.DataFrame) -> dict[str, list[str]]:
+    """Flag cell lines where one source says off (< 1 TPM) and another says expressed."""
+    flags: dict[str, list[str]] = {}
+    if categories.empty:
+        return flags
+    for ach in categories.index[categories["sources_disagree"].astype(bool)]:
+        info = _expression_info(categories, ach)
+        values = ", ".join(
+            f"{data_service.RNA_SOURCE_LABELS.get(s, s)} {v:g}" for s, v in info["tpm_by_source"].items()
+        )
+        flags.setdefault(ach, []).append(f"Sources disagree on expressed vs off ({values} TPM)")
     return flags
 
 
@@ -418,6 +513,7 @@ def run_ranking(
     assay_type: str | None = None,
     include_geo: bool = False,
     multi_gene_method: str = "geometric",
+    low_expression_mode: str = DEFAULT_LOW_EXPRESSION_MODE,
 ) -> list[dict]:
     """
     Execute the full ranking pipeline. Returns list of ranked cell line dicts.
@@ -426,9 +522,12 @@ def run_ranking(
     combined_per_gene: dict[str, pd.DataFrame] = {}
     coverage_per_gene: dict[str, pd.Series] = {}
     flags_per_gene: dict[str, dict[str, list[str]]] = {}
+    categories_per_gene: dict[str, pd.DataFrame] = {}
 
     if multi_gene_method not in MULTI_GENE_METHODS:
         raise ValueError(f"unknown multi_gene_method: {multi_gene_method!r}")
+    if low_expression_mode not in LOW_EXPRESSION_MODES:
+        raise ValueError(f"unknown low_expression_mode: {low_expression_mode!r}")
     # Geometric mean needs "higher = better" for every gene, so LOW genes are
     # inverted (1 - score). Single-gene search and summed RRF keep the old scores.
     invert_low = len(genes) > 1 and multi_gene_method == "geometric"
@@ -446,9 +545,19 @@ def run_ranking(
         coverage = signal["coverage"].astype(int) if len(signal) >= 2 else pd.Series(dtype=int)
         coverage_per_gene[gene["hugo"]] = coverage
 
+        # 1b. Expression category from raw TPM (shown for every gene). For a
+        #     LOW gene it also sets the RNA score of off cell lines (priority 5).
+        categories = data_service.classify_expression(signal)
+        categories_per_gene[gene["hugo"]] = categories
+        if gene["direction"] == "low":
+            expr_rrf = apply_low_expression_mode(expr_rrf, categories, low_expression_mode)
+
         # 2. Protein (always scored, independent of the RNA source filter)
         prot_rrf = rank_protein(ensg, scoring_method)
-        flags_per_gene[gene["hugo"]] = _gene_flags(signal, prot_rrf)
+        flags = _gene_flags(signal, prot_rrf)
+        for ach, texts in _disagree_flags(categories).items():
+            flags.setdefault(ach, []).extend(texts)
+        flags_per_gene[gene["hugo"]] = flags
 
         # 3. Combine
         combined = combine_rna_protein(
@@ -466,11 +575,28 @@ def run_ranking(
         combined_per_gene[gene["hugo"]] = combined
 
     # 5. Multi-gene combination
+    # Sort tier per cell line: for a single LOW gene the expression category
+    # comes first ("classify first, then rank"); otherwise every tier is 0.
+    single_low = len(genes) == 1 and genes[0]["direction"] == "low"
+
+    def tier_of(ach: str) -> int:
+        if not single_low:
+            return 0
+        cats = categories_per_gene[genes[0]["hugo"]]
+        if ach not in cats.index:
+            return low_expression_tier(None, low_expression_mode)
+        return low_expression_tier(
+            cats.at[ach, "category"], low_expression_mode, bool(cats.at[ach, "sources_disagree"])
+        )
+
     if len(genes) == 1:
         gene = genes[0]
         final_df = combined_per_gene[gene["hugo"]].copy()
         ascending = gene["direction"] == "low"
-        final_df = _sort_by_score(final_df, "combined_score", ascending)
+        final_df["tier"] = [tier_of(a) for a in final_df["ach_id"]]
+        final_df = final_df.sort_values(
+            ["tier", "combined_score", "ach_id"], ascending=[True, ascending, True], kind="mergesort"
+        ).reset_index(drop=True)
         final_df["final_rank"] = range(1, len(final_df) + 1)
         final_df["final_score"] = final_df["combined_score"]
     else:
@@ -602,15 +728,25 @@ def run_ranking(
             "fusions": fusions,
             "per_gene_rank": per_gene_rank,
             "score_flags": _score_flags(flags_per_gene, row["ach_id"], row.get("genes_skipped")),
+            # Raw TPM + expression category per gene (priority 5)
+            "expression": {
+                g["hugo"]: _expression_info(categories_per_gene[g["hugo"]], row["ach_id"])
+                for g in genes
+            },
+            "_tier": tier_of(row["ach_id"]),
         })
 
     # Determine sort direction for post-filter re-ranking.
     # For single gene with "low" direction, lower score = better → sort ascending.
     # For multi-gene, direction is already baked into RRF ranks → sort descending.
-    _sort_descending = not (len(genes) == 1 and genes[0]["direction"] == "low")
+    _sort_descending = not single_low
 
-    # Re-rank after filters
-    results.sort(key=lambda x: x["score"], reverse=_sort_descending)
+    def sort_key(r: dict):
+        # Tier first (expression category for a single LOW gene), then score.
+        return (r["_tier"], -r["score"] if _sort_descending else r["score"])
+
+    # Re-rank after filters (stable sort: equal keys keep the ach_id tie order)
+    results.sort(key=sort_key)
     for i, r in enumerate(results):
         r["rank"] = i + 1
 
@@ -643,12 +779,14 @@ def run_ranking(
                 # No match (q6=0) → score × 1.3 (pushed down in ascending sort)
                 r["score"] = round(r["score"] * (1.0 + 0.3 * (1.0 - q6_score)), 4)
 
-        # Re-sort by boosted score (respecting direction)
-        results.sort(key=lambda x: x["score"], reverse=_sort_descending)
+        # Re-sort by boosted score (respecting direction and tier)
+        results.sort(key=sort_key)
         for i, r in enumerate(results):
             r["rank"] = i + 1
 
     results = results[:top_n]
+    for r in results:
+        r.pop("_tier", None)
 
     # GEO support for the returned cell lines (extra evidence only:
     # it is added after ranking and never changes score or rank)

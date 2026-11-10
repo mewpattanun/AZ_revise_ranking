@@ -222,6 +222,26 @@ function MethodsContent() {
         (Z-Score / Percentile → RRF) can still be selected for comparison.
       </p>
 
+      <h4>Step 1b: Expression Categories and Low Expression</h4>
+      <p>
+        Every cell line also gets an expression category from its raw TPM, shown in
+        the Expression column: <strong>Below detection</strong> (&lt; 0.1 TPM in every
+        source), <strong>Negligible</strong> (&lt; 1 TPM in every source),{" "}
+        <strong>Low measurable</strong> (1–3 TPM) or <strong>Moderate</strong> (&gt; 3 TPM).
+        A cell line is only called off when DepMap and HPA both agree; if one source says
+        off and the other says expressed, it is marked with ⚠.
+      </p>
+      <p>
+        For a LOW gene the category is applied first, then the score: the lowest number is
+        not automatically the best low-expression candidate, because values below 1 TPM are
+        mostly noise. With <strong>TPM below 1</strong> (default) the off cell lines come
+        first and tie on RNA, so protein (where measured) orders them. With{" "}
+        <strong>TPM greater than 1</strong> the 1–3 TPM cell lines come first (those where
+        DepMap and HPA agree before those where one source says off) and off cell lines go
+        last. The 1 TPM cutoff was checked against known negative cell lines and
+        DepMap–HPA agreement (see the threshold benchmark in the repository).
+      </p>
+
       <h4>Step 2: Protein Scoring</h4>
       <p>
         Protein is scored the same way as RNA: a gene-wise robust z-score of the
