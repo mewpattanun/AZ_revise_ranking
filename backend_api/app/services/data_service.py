@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from app.config import RRF_K
+from app.config import EXPR_DETECTION_TPM, EXPR_MODERATE_TPM, EXPR_OFF_TPM, RRF_K
 from app.database import query, query_df
 
 
@@ -136,12 +136,14 @@ def get_rna_consensus(
                     (QC only: it never changes the score or the ranking)
 
     Returns a DataFrame indexed by ach_id with columns
-    consensus, coverage, discordance and z_<source> for each source used.
+    consensus, coverage, discordance, z_<source> and tpm_<source> (raw TPM,
+    used for the expression category) for each source used.
     df.attrs["mad_zero_sources"] lists the sources where MAD = 0 for this gene
     (z then used the SD instead; surfaced to the user as a flag).
     """
     transform = transform or RNA_TRANSFORM
     zcols: dict[str, pd.Series] = {}
+    tpmcols: dict[str, pd.Series] = {}
     mad_zero_sources: list[str] = []
     for name, table in RNA_SOURCE_TABLES.items():
         if enabled_sources is not None and name not in enabled_sources:
@@ -154,6 +156,7 @@ def get_rna_consensus(
         if _mad_is_zero(prepared):
             mad_zero_sources.append(name)
         zcols[f"z_{name}"] = _robust_z(prepared)
+        tpmcols[f"tpm_{name}"] = tpm.clip(lower=0)
 
     if not zcols:
         empty = pd.DataFrame(columns=_RNA_SIGNAL_COLUMNS, dtype=float)
@@ -168,9 +171,59 @@ def get_rna_consensus(
         "coverage": coverage,
         "discordance": spread.where(coverage >= 2),
     })
-    result = pd.concat([out, zmat], axis=1)
+    result = pd.concat([out, zmat, pd.DataFrame(tpmcols)], axis=1)
     result.attrs["mad_zero_sources"] = mad_zero_sources
     return result
+
+
+# ── Expression categories (AZ priority 5) ─────────────────────
+
+# Ordered from "not expressed" to "expressed". "missing" = no RNA value at all.
+EXPRESSION_CATEGORIES = ("below_detection", "negligible", "low_measurable", "moderate")
+OFF_CATEGORIES = ("below_detection", "negligible")
+
+
+def classify_expression(signal: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expression category per cell line from raw TPM (get_rna_consensus output).
+
+    A cell line gets the HIGHEST band any of its sources puts it in, so it only
+    counts as off when every source agrees (conservative):
+      below_detection : every source below its detection limit (EXPR_DETECTION_TPM)
+      negligible      : every source below EXPR_OFF_TPM (1 TPM)
+      low_measurable  : highest source from 1 to 3 TPM
+      moderate        : highest source above EXPR_MODERATE_TPM (3 TPM)
+
+    Returns a DataFrame indexed by ach_id with columns:
+      category, tpm (mean over sources), tpm_<source>,
+      sources_disagree (one source says off, another says expressed).
+    Cell lines without any RNA value are not in the result ("missing").
+    """
+    tpm_cols = [c for c in signal.columns if c.startswith("tpm_")]
+    if not tpm_cols:
+        return pd.DataFrame(columns=["category", "tpm", "sources_disagree"])
+    tpm = signal[tpm_cols].astype(float)
+    have = tpm.notna()
+    top = tpm.max(axis=1)
+
+    # every available source below its own detection limit
+    detect = pd.Series({c: EXPR_DETECTION_TPM.get(c[len("tpm_"):], 0.0) for c in tpm_cols})
+    below_detect = (tpm.lt(detect, axis=1) | ~have).all(axis=1)
+
+    category = np.select(
+        [below_detect, top < EXPR_OFF_TPM, top <= EXPR_MODERATE_TPM],
+        ["below_detection", "negligible", "low_measurable"],
+        default="moderate",
+    )
+    off = tpm.lt(EXPR_OFF_TPM)
+    on = tpm.ge(EXPR_OFF_TPM)
+    out = pd.DataFrame({
+        "category": category,
+        "tpm": tpm.mean(axis=1),
+        "sources_disagree": off.any(axis=1) & on.any(axis=1),
+    }, index=signal.index)
+    out = pd.concat([out, tpm], axis=1)
+    return out[have.any(axis=1)]
 
 
 # ── GEO support (extra evidence only, never part of the score) ──

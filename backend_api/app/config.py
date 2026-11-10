@@ -43,7 +43,23 @@ RRF_K = 60
 
 # Echoed in every /api/rank response so exported results can be traced back
 # to the scoring method that produced them. Bump when scoring changes.
-SCORING_VERSION = "3.0.0.dev2"
+SCORING_VERSION = "3.0.0.dev3"
+
+# ── Low-expression mode (AZ priority 5) ──────────────────────
+# Each cell line gets an expression category from its raw TPM. The category is
+# shown with every result and decides the order of "low" searches.
+# Thresholds were checked on real data, see
+# docs/benchmarks/2026-11-08_low_expression_thresholds.md
+EXPR_DETECTION_TPM = {"depmap": 0.1, "hpa": 0.1}  # below = "below detection" (HPA reports in 0.1 steps, so this means 0)
+EXPR_OFF_TPM = 1.0        # below = "negligible": the gene counts as off
+EXPR_MODERATE_TPM = 3.0   # above = "moderate"; from 1 to 3 TPM = "low measurable"
+
+# What "low" means in a search:
+#   off        = button "TPM below 1": off cell lines first, tied on RNA (default)
+#   measurable = button "TPM greater than 1": 1-3 TPM first, off cell lines last
+#   score      = old behaviour: sort by score only (categories still shown)
+LOW_EXPRESSION_MODES = ("off", "measurable", "score")
+DEFAULT_LOW_EXPRESSION_MODE = "off"
 
 # ── Server ───────────────────────────────────────────────────
 API_HOST = os.getenv("CLF_HOST", "0.0.0.0")

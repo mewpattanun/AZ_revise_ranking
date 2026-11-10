@@ -271,6 +271,43 @@
   color: #721c24;
 }
 
+/* Expression column: raw TPM + category (AZ priority 5) */
+.exprList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.exprRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.exprGene {
+  font-size: 10px;
+  font-weight: 700;
+  color: #555;
+  min-width: 42px;
+}
+
+.exprTpm {
+  font-size: 11px;
+  color: #444;
+  font-variant-numeric: tabular-nums;
+  min-width: 62px;
+}
+
+.exprPill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+}
+
 /* Scenario tag */
 .scenTag {
   display: inline-block;
