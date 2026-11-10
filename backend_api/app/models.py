@@ -45,6 +45,12 @@ class RankRequest(BaseModel):
         pattern="^(geometric|summed_rrf)$",
         description="How several genes are combined: geometric = weighted geometric mean (default), summed_rrf = legacy",
     )
+    low_expression_mode: str = Field(
+        "off",
+        pattern="^(off|measurable|score)$",
+        description="What 'low' means for LOW genes: off = 'TPM below 1', below 1 TPM in every source first (default); "
+                    "measurable = 'TPM greater than 1', 1-3 TPM first; score = legacy, sort by score only",
+    )
     sources: list[str] = Field(
         default=["depmap", "hpa"],
         description="RNA expression sources to include in ranking: depmap, hpa. Protein is always scored separately (see w_protein)."
@@ -92,6 +98,8 @@ class RankedCellLine(BaseModel):
     q7_warning: str | None = None
     score_flags: list[str] | None = None
     geo: dict[str, dict] | None = None
+    # Per gene: {"category", "tpm", "tpm_by_source", "sources_disagree"}
+    expression: dict[str, dict] | None = None
 
 
 class RankResponse(BaseModel):

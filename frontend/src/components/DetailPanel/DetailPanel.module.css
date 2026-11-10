@@ -215,6 +215,15 @@
   font-weight: 600;
 }
 
+/* Expression category pill (AZ priority 5); colours come from expression.js */
+.exprPill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+}
+
 /* ── Source-Level Scores ── */
 .sourceSection {
   display: flex;

@@ -4,7 +4,7 @@ Core ranking endpoint — POST /api/rank
 
 from fastapi import APIRouter, HTTPException
 
-from app.config import SCORING_VERSION
+from app.config import EXPR_DETECTION_TPM, EXPR_MODERATE_TPM, EXPR_OFF_TPM, SCORING_VERSION
 from app.models import RankRequest, RankResponse
 from app.services import data_service, ranking_service
 
@@ -60,6 +60,7 @@ def rank_cell_lines(req: RankRequest):
         sources=scoring_sources,
         assay_type=req.assay_type,
         multi_gene_method=req.multi_gene_method,
+        low_expression_mode=req.low_expression_mode,
     )
 
     return RankResponse(
@@ -87,6 +88,12 @@ def rank_cell_lines(req: RankRequest):
             "top_n": req.top_n,
             "scoring_method": req.scoring_method,
             "multi_gene_method": req.multi_gene_method,
+            "low_expression": {
+                "mode": req.low_expression_mode,
+                "detection_tpm": EXPR_DETECTION_TPM,
+                "off_tpm": EXPR_OFF_TPM,
+                "moderate_tpm": EXPR_MODERATE_TPM,
+            },
             "sources": scoring_sources,
             "assay_type": req.assay_type,
         },

@@ -1,6 +1,7 @@
 import { Fragment, useState, useEffect } from "react";
 import { getCellLineEvidence, getSimilarCellLines } from "../../api";
 import styles from "./DetailPanel.module.css";
+import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
 
 export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose }) {
   const [data, setData] = useState(null);
@@ -122,6 +123,21 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                     {gd.expression_rank == null && (
                       <div className={styles.geneCardRank}>No expression data</div>
                     )}
+                    {resultRow?.expression?.[g.hugo] && (() => {
+                      const info = resultRow.expression[g.hugo];
+                      const cat = categoryInfo(info.category);
+                      return (
+                        <div className={styles.geneCardSub} title={expressionTooltip(info)}>
+                          Expression: <strong>{formatTpm(info)}</strong>{" "}
+                          <span className={styles.exprPill} style={{ color: cat.color, background: cat.bg }}>
+                            {cat.label}
+                          </span>
+                          {info.sources_disagree && (
+                            <span style={{ color: "#856404" }}> ⚠ DepMap and HPA disagree</span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className={styles.geneCardSub}>
                       {scoringMethod === "robust_z"
                         ? `Score from the size of one RNA consensus robust z (${gd.source_count} source${gd.source_count !== 1 ? "s" : ""})`

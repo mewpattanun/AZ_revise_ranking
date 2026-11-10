@@ -31,6 +31,8 @@ const DEFAULT_FILTERS = {
   metabolite_threshold: null,
   exclude_mirna: null,
   mirna_threshold: null,
+  // What "low" means for LOW genes (AZ priority 5): "off" | "measurable"
+  low_expression_mode: "off",
 };
 
 export default function App() {
@@ -210,7 +212,11 @@ export default function App() {
           </div>
 
           <div className={styles.sidebarSection}>
-            <FilterPanel filters={filters} onChange={handleFilterChange} />
+            <FilterPanel
+              filters={filters}
+              onChange={handleFilterChange}
+              hasLowGene={genes.some((g) => g.direction === "low")}
+            />
           </div>
 
           <div className={styles.sidebarSection}>

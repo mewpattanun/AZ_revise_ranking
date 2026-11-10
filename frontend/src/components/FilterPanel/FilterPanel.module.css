@@ -165,6 +165,23 @@
   border-right: 1px solid var(--clr-border);
 }
 
+/* Low-expression toggle: keep "TPM greater than 1" on one line by letting
+   each button take the width of its own label instead of an equal half. */
+.lowModeBtn {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  padding: 12px var(--sp-sm);
+  font-size: var(--fs-base);
+}
+
+/* Laptop widths: the sidebar is narrower, so keep the smaller text there
+   (still taller buttons) so both labels stay on one line. */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .lowModeBtn {
+    font-size: var(--fs-sm);
+  }
+}
+
 .mode_ignore {
   background: var(--clr-border);
   color: var(--clr-text-secondary);
