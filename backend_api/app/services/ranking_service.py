@@ -323,7 +323,7 @@ def combine_rna_protein(
     Combine expression and protein scores.
     invert=True flips both to "low is good" (1 - score), used for LOW genes in
     multi-gene searches so that a higher score is always better.
-    Returns DataFrame with: ach_id, combined_score, scenario, coverage_confidence.
+    Returns DataFrame with: ach_id, combined_score, scenario, modality_coverage.
     """
     expr_norm = _norm01(expr_rrf)
     prot_norm = _norm01(prot_rrf)
@@ -342,15 +342,15 @@ def combine_rna_protein(
         if has_rna and has_prot:
             score = w_rna * expr_norm[ach] + w_prot * prot_norm[ach]
             scenario = "RNA+Protein"
-            confidence = 1.0
+            modality_coverage = 1.0
         elif has_rna:
-            score = w_rna * float(expr_norm[ach])
+            score = float(expr_norm[ach])
             scenario = "RNA only"
-            confidence = w_rna
+            modality_coverage = w_rna
         elif has_prot:
-            score = w_prot * float(prot_norm[ach])
+            score = float(prot_norm[ach])
             scenario = "Protein only"
-            confidence = w_prot
+            modality_coverage = w_prot
         else:
             continue
 
@@ -358,12 +358,12 @@ def combine_rna_protein(
             "ach_id": ach,
             "combined_score": score,
             "scenario": scenario,
-            "coverage_confidence": confidence,
+            "modality_coverage": modality_coverage,
         })
 
     # Explicit columns: a gene with no usable data must give an empty table
     # (the caller returns no results), not a column-less frame that crashes.
-    return pd.DataFrame(rows, columns=["ach_id", "combined_score", "scenario", "coverage_confidence"])
+    return pd.DataFrame(rows, columns=["ach_id", "combined_score", "scenario", "modality_coverage"])
 
 
 # ── Multi-gene fusion ────────────────────────────────────────
@@ -629,13 +629,13 @@ def run_ranking(
                 gdf = combined_per_gene[gene["hugo"]]
                 match = gdf[gdf["ach_id"] == ach]
                 if len(match) > 0:
-                    confidences.append(match["coverage_confidence"].iloc[0])
+                    confidences.append(match["modality_coverage"].iloc[0])
                     scenarios.append(match["scenario"].iloc[0])
 
             rows.append({
                 "ach_id": ach,
                 "final_score": float(multi_rrf[ach]),
-                "coverage_confidence": float(np.mean(confidences)) if confidences else 0.0,
+                "modality_coverage": float(np.mean(confidences)) if confidences else 0.0,
                 "scenario": " | ".join(scenarios),
                 # genes this cell line has no score for (skipped in the geometric mean)
                 "genes_skipped": [
@@ -644,7 +644,7 @@ def run_ranking(
             })
 
         final_df = pd.DataFrame(
-            rows, columns=["ach_id", "final_score", "coverage_confidence", "scenario", "genes_skipped"]
+            rows, columns=["ach_id", "final_score", "modality_coverage", "scenario", "genes_skipped"]
         )
         final_df = _sort_by_score(final_df, "final_score", ascending=False)
         final_df["final_rank"] = range(1, len(final_df) + 1)
@@ -721,7 +721,7 @@ def run_ranking(
             "lineage": cl.get("lineage"),
             "growth_pattern": cl.get("growth_pattern"),
             "score": round(float(row[score_col]), 4),
-            "confidence": round(float(row["coverage_confidence"]), 2),
+            "confidence": round(float(row["modality_coverage"]), 2),
             "scenario": row.get("scenario", ""),
             "is_core": is_core,
             "mutations": mutations,
