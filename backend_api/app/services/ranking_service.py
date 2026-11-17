@@ -507,6 +507,7 @@ def run_ranking(
     target_subtype: str | None = None,
     q6_boost_enabled: bool = True,
     core_only: bool = False,
+    require_protein: bool = False,
     top_n: int = 20,
     scoring_method: str = "robust_z",
     sources: list[str] | None = None,
@@ -684,7 +685,9 @@ def run_ranking(
 
         if core_only and not is_core:
             continue
-
+        
+        if require_protein and "Protein" not in str(row.get("scenario", "")):
+            continue
         # Collect mutations for include mode
         mutations = None
         if mutation_mode == "include":
@@ -722,6 +725,7 @@ def run_ranking(
             "growth_pattern": cl.get("growth_pattern"),
             "score": round(float(row[score_col]), 4),
             "confidence": round(float(row["modality_coverage"]), 2),
+            "modality_coverage": round(float(row["modality_coverage"]), 2),
             "scenario": row.get("scenario", ""),
             "is_core": is_core,
             "mutations": mutations,
