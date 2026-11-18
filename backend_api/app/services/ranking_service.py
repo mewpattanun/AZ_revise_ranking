@@ -245,6 +245,47 @@ def apply_low_expression_mode(expr: pd.Series, categories: pd.DataFrame, mode: s
         out[off] = float(expr.max()) + 1e-6 * span
     return out
 
+def apply_low_expression_to_protein(
+    prot_rrf: pd.Series,
+    categories: pd.DataFrame,
+    mode: str,
+) -> pd.Series:
+    """
+    P6 LOW-mode fix: extend P5's off-tier treatment to protein.
+
+    apply_low_expression_mode (P5) pushes RNA of off cells to the extreme
+    so noise below 1 TPM does not order them. Protein was left untouched,
+    which created a bug in mixed-coverage off tiers: cells without protein
+    kept combined_score = 0 while cells with low protein scored > 0, so
+    RNA-only cells unfairly ranked above cells with measured protein.
+
+    This helper mirrors the push for protein, but only when coverage is
+    MIXED (some off cells have protein, some don't). When every off cell
+    has protein (Prab's P5 Case A), protein is left alone so it can still
+    order the off group — keeping test_protein_still_orders_lines_inside_
+    the_off_group valid.
+    """
+    if mode not in _LOW_TIERS or prot_rrf.empty or categories.empty:
+        return prot_rrf
+    is_off = categories["category"].isin(data_service.OFF_CATEGORIES)
+    off = categories.index[is_off]
+    if len(off) == 0:
+        return prot_rrf
+
+    # Case A (preserve P5): every off cell has protein → leave alone
+    off_in_prot = off.intersection(prot_rrf.index)
+    if len(off_in_prot) == len(off):
+        return prot_rrf
+
+    # Case B (P6 fix): mixed coverage → tie off cells on protein too,
+    # mirroring the RNA push direction so sort order stays consistent.
+    span = float(prot_rrf.max() - prot_rrf.min()) or 1.0
+    out = prot_rrf.astype(float).copy()
+    if mode == "off":
+        out[off_in_prot] = float(prot_rrf.min()) - 1e-6 * span
+    else:
+        out[off_in_prot] = float(prot_rrf.max()) + 1e-6 * span
+    return out
 
 def _expression_info(categories: pd.DataFrame, ach_id: str) -> dict:
     """Category and raw TPM of one cell line for one gene (shown in the results)."""
@@ -555,6 +596,10 @@ def run_ranking(
 
         # 2. Protein (always scored, independent of the RNA source filter)
         prot_rrf = rank_protein(ensg, scoring_method)
+        # P6 LOW-mode fix: in mixed-coverage off tier, tie protein too so
+        # RNA-only cells do not get a spurious advantage from missing protein.
+        if gene["direction"] == "low":
+            prot_rrf = apply_low_expression_to_protein(prot_rrf, categories, low_expression_mode)
         flags = _gene_flags(signal, prot_rrf)
         for ach, texts in _disagree_flags(categories).items():
             flags.setdefault(ach, []).extend(texts)
