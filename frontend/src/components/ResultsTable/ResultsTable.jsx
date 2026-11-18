@@ -206,6 +206,7 @@ export default function ResultsTable({
               </th>
               {showMatchColumn && <th>Match</th>}
               <th>Scenario</th>
+              <th>Coverage</th>
               {showMutationColumn && <th>Mutation</th>}
               {showFusionColumn && <th>Fusion</th>}
               {showAssayColumn && <th>Assay</th>}
@@ -281,6 +282,11 @@ export default function ResultsTable({
                     <span className={`${styles.scenTag} ${scenarioClass(r.scenario)}`}>
                       {r.scenario}
                     </span>
+                  </td>
+                  <td style={{ fontSize: "12px", color: "#555" }}>
+                    {r.modality_coverage != null
+                      ? r.modality_coverage.toFixed(2)
+                      : "—"}
                   </td>
                   {showMutationColumn && (
                     <td style={{ fontSize: "12px", color: "#555" }}>

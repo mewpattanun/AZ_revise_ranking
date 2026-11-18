@@ -76,6 +76,7 @@ export default function FilterPanel({ filters, onChange, hasLowGene = false }) {
     if (filters.exclude_metabolite) n++;
     if (filters.exclude_mirna) n++;
     if (filters.core_only) n++;
+    if (filters.require_protein) n++;
     const sources = filters.sources || ["depmap", "hpa"];
     if (sources.length < DATA_SOURCES.length) n++;
     if (filters.w_rna !== 0.7) n++;
@@ -337,6 +338,18 @@ export default function FilterPanel({ filters, onChange, hasLowGene = false }) {
                   onChange={(e) => set("core_only", e.target.checked)}
                 />
                 Core only (data in all RNA sources)
+              </label>
+            </div>
+
+            {/* P6: Require protein evidence */}
+            <div className={styles.checkField}>
+              <label className={styles.checkLabel}>
+                <input
+                  type="checkbox"
+                  checked={filters.require_protein}
+                  onChange={(e) => set("require_protein", e.target.checked)}
+                />
+                Require protein evidence
               </label>
             </div>
 
