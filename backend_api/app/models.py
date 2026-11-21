@@ -51,6 +51,14 @@ class RankRequest(BaseModel):
         description="What 'low' means for LOW genes: off = 'TPM below 1', below 1 TPM in every source first (default); "
                     "measurable = 'TPM greater than 1', 1-3 TPM first; score = legacy, sort by score only",
     )
+    rna_method: str = Field(
+        "robust_z",
+        pattern="^(robust_z|standard_z|log2_tpm)$",
+        description="How each RNA source is put on a common scale before the sources are averaged: "
+                    "robust_z = (x - median) / (1.4826 MAD) (default), standard_z = (x - mean) / SD "
+                    "(both use only the cell lines at or above 1 TPM for the reference), "
+                    "log2_tpm = log2(TPM + 1) with no z-score",
+    )
     sources: list[str] = Field(
         default=["depmap", "hpa"],
         description="RNA expression sources to include in ranking: depmap, hpa. Protein is always scored separately (see w_protein)."
