@@ -237,7 +237,10 @@ def test_no_note_when_low_gene_pushed_expressing_lines_out(low_data):
     # Without G1, G and H (which express G1) would top the list. G1 LOW pushes
     # them out, so its effect is visible and no note is needed even though every
     # line shown is off for G1.
-    g2 = {"A": 50.0, "B": 50.0, "C": 50.0, "D": 50.0, "E": 10.0, "F": 10.0, "G": 100.0, "H": 90.0}
+    # H's G2 is only a little above A-D: on the raw TPM scale H (10 TPM of G1) still
+    # gets a G1 LOW desirability of ~0.6 (G at 50 TPM sets the scale), so with a much
+    # higher G2 (e.g. 90) the geometric mean rightly lets H back into the top 4.
+    g2 = {"A": 50.0, "B": 50.0, "C": 50.0, "D": 50.0, "E": 10.0, "F": 10.0, "G": 100.0, "H": 60.0}
     low_data["by_gene"]["ENSG_G2"] = {"fact_expression_depmap": g2, "fact_expression_hpa": g2}
     notes = []
     results = run_ranking([HIGH_G2, LOW], top_n=4, notes_out=notes)
