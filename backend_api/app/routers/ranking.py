@@ -61,6 +61,7 @@ def rank_cell_lines(req: RankRequest):
         assay_type=req.assay_type,
         multi_gene_method=req.multi_gene_method,
         low_expression_mode=req.low_expression_mode,
+        rna_method=req.rna_method,
     )
 
     return RankResponse(
@@ -88,6 +89,7 @@ def rank_cell_lines(req: RankRequest):
             "top_n": req.top_n,
             "scoring_method": req.scoring_method,
             "multi_gene_method": req.multi_gene_method,
+            "rna_method": req.rna_method,
             "low_expression": {
                 "mode": req.low_expression_mode,
                 "detection_tpm": EXPR_DETECTION_TPM,
