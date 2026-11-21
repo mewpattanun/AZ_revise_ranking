@@ -200,7 +200,7 @@ function MethodsContent() {
       <p>
         DepMap and HPA derive from the same underlying data, so they are not
         treated as independent evidence. Each source is standardised separately
-        (a gene-wise robust z-score of log2(TPM+1) across cell lines, using the
+        (a gene-wise robust z-score of TPM across cell lines, using the
         median and MAD) and the matched robust z-scores are averaged into one RNA
         consensus per cell line. The difference between the two sources is kept
         as a discordance QC value (shown in the detail panel); it does not change
@@ -216,8 +216,14 @@ function MethodsContent() {
         source is scored on that source alone, so missing one source is not penalised.
       </p>
       <p>
-        If MAD is 0 for a gene in a source (most cell lines share the same value, e.g.
-        TPM = 0), the standard deviation is used instead and the cell line is flagged
+        The median and MAD of a gene are estimated after removing the cell lines below 1 TPM
+        (the same "gene is off" cutoff as the expression categories), so tiny values such as
+        0.01 in DepMap and the 0.1 steps in HPA do not set the scale: both sources give
+        similar z-scores for the same cell line. The z-score itself still uses the real
+        value of every cell line, so the order of cell lines is unchanged and the off lines
+        get a z below the expressed ones. If MAD is 0 for a gene in a source (most cell
+        lines at or above 1 TPM share the same value), the standard deviation is used
+        instead and the cell line is flagged
         with ⚠ in the results table and the detail panel. The legacy rank-based methods
         (Z-Score / Percentile → RRF) can still be selected for comparison.
       </p>

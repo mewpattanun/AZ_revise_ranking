@@ -42,6 +42,7 @@ export function exportResultsCsv({ results, genes, filters }) {
   );
   lines.push(`# RNA weight: ${filters.w_rna}  Protein weight: ${filters.w_protein}`);
   lines.push(`# Sources: ${(filters.sources || ["depmap", "hpa"]).join(", ")}`);
+  lines.push(`# RNA normalisation: ${filters.rna_method || "robust_z"}`);
 
   if (filters.disease_filter) lines.push(`# Disease filter: ${filters.disease_filter}`);
   if (filters.lineage_filter) lines.push(`# Lineage filter: ${filters.lineage_filter}`);

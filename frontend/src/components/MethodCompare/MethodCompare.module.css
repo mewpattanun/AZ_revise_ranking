@@ -1,0 +1,272 @@
+/* ── MethodCompare (modal overlay) ─────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--clr-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: min(1180px, 95vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-md);
+  padding: var(--sp-md) var(--sp-lg);
+  border-bottom: 1px solid var(--clr-border);
+}
+
+.title {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+}
+
+.subtitle {
+  font-size: var(--fs-sm);
+  color: var(--clr-text-secondary);
+  margin-top: 2px;
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--clr-text-muted);
+  padding: 0 var(--sp-xs);
+}
+
+.closeBtn:hover {
+  color: var(--clr-text);
+}
+
+.body {
+  padding: var(--sp-md) var(--sp-lg) var(--sp-lg);
+  overflow-y: auto;
+}
+
+.status {
+  padding: var(--sp-xl);
+  text-align: center;
+  color: var(--clr-text-muted);
+}
+
+.error {
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--clr-danger-light);
+  color: var(--clr-danger);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+/* Overlap cards */
+.overlaps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-md);
+}
+
+.overlapCard {
+  border: 1px solid var(--clr-border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--clr-bg);
+}
+
+.overlapNames {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--clr-text-secondary);
+}
+
+.overlapValue {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+}
+
+.overlapValue span {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--clr-text-secondary);
+}
+
+/* Table */
+.tableWrap {
+  overflow: auto;
+  max-height: 40vh;
+  border: 1px solid var(--clr-border);
+  border-radius: var(--radius-md);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.table th,
+.table td {
+  padding: 6px 10px;
+  text-align: center;
+  border-bottom: 1px solid var(--clr-border);
+  white-space: nowrap;
+}
+
+.table thead th {
+  position: sticky;
+  background: var(--clr-bg);
+  font-weight: 700;
+  z-index: 1;
+}
+
+.table thead tr:first-child th {
+  top: 0;
+}
+
+.table thead tr:nth-child(2) th {
+  top: 33px;
+}
+
+.table .group {
+  border-left: 2px solid var(--clr-surface);
+}
+
+.table .sub {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--clr-text-secondary);
+}
+
+.thSub {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--clr-text-muted);
+}
+
+.table .left {
+  text-align: left;
+}
+
+.name {
+  font-weight: 700;
+}
+
+.achId {
+  font-size: var(--fs-xs);
+  color: var(--clr-text-muted);
+}
+
+.disease {
+  color: var(--clr-text-secondary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  color: var(--clr-text-secondary);
+}
+
+.geneTag {
+  font-size: var(--fs-xs);
+  color: var(--clr-text-muted);
+  margin-right: 6px;
+}
+
+.rankCell {
+  white-space: nowrap;
+}
+
+.rankPill {
+  display: inline-block;
+  min-width: 34px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.outside {
+  background: #f0efec;
+  color: var(--clr-text-muted);
+  font-weight: 500;
+}
+
+.up,
+.down {
+  margin-left: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.up {
+  color: var(--clr-success);
+}
+
+.down {
+  color: var(--clr-danger);
+}
+
+/* Footer */
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-md);
+  margin-top: var(--sp-md);
+}
+
+.notes {
+  font-size: var(--fs-xs);
+  color: var(--clr-text-secondary);
+  line-height: 1.55;
+}
+
+.notes p {
+  margin-bottom: 6px;
+}
+
+.notes ul {
+  margin: 0 0 6px 18px;
+}
+
+.csvBtn {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: 1px solid var(--clr-border);
+  border-radius: var(--radius-md);
+  background: var(--clr-surface);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--clr-text);
+}
+
+.csvBtn:hover {
+  background: var(--clr-bg);
+}
+
+@media (max-width: 760px) {
+  .overlaps {
+    grid-template-columns: 1fr;
+  }
+
+  .footer {
+    flex-direction: column;
+  }
+}
