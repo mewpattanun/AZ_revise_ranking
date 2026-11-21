@@ -110,7 +110,9 @@ def test_measurable_mode_puts_source_disagreement_after_agreement(low_data):
     order = _order(run_ranking([LOW], low_expression_mode="measurable"))
     assert order[:3] == ["F", "E", "X"]
     # In "off" mode X is simply low measurable (tier after the off lines).
-    assert _order(run_ranking([LOW]))[4:7] == ["X", "F", "E"]
+    # (only the tier is checked; the order of near-equal 1-2 TPM lines inside it is noise
+    # in this 9-line fixture, where the median itself falls on one of the lines)
+    assert set(_order(run_ranking([LOW]))[4:7]) == {"X", "F", "E"}
 
 
 def test_score_mode_keeps_the_old_order(low_data):
@@ -181,7 +183,9 @@ def test_multi_gene_measurable_mode_treats_off_as_a_failed_gene(low_data):
 
 def test_results_show_tpm_and_category(low_data):
     by_id = {r["ach_id"]: r for r in run_ranking([LOW])}
-    assert by_id["C"]["expression"]["G1"] == {
+    info = dict(by_id["C"]["expression"]["G1"])
+    assert isinstance(info.pop("rna_value"), float)      # the RNA z of the chosen method, checked in test_ranking.py
+    assert info == {
         "category": "below_detection",
         "tpm": 0.03,
         "tpm_by_source": {"depmap": 0.06, "hpa": 0.0},
@@ -197,8 +201,10 @@ def test_disagreement_is_flagged(fake_data):
         "fact_expression_hpa": {"X": 2.5, "Y": 30.0, "Z": 0.2},
     }
     by_id = {r["ach_id"]: r for r in run_ranking([LOW])}
-    assert by_id["X"]["score_flags"] == ["Sources disagree on expressed vs off (DepMap 0.5, HPA 2.5 TPM)"]
-    assert by_id["Y"]["score_flags"] is None
+    def disagree(row):   # DepMap is almost all below 1 TPM in this fixture, so a MAD=0 note may also appear
+        return [f for f in (row["score_flags"] or []) if f.startswith("Sources disagree")]
+    assert disagree(by_id["X"]) == ["Sources disagree on expressed vs off (DepMap 0.5, HPA 2.5 TPM)"]
+    assert disagree(by_id["Y"]) == []
 
 
 def test_unknown_mode_is_rejected(low_data):

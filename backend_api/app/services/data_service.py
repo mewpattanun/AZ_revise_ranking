@@ -76,11 +76,12 @@ _RNA_SIGNAL_COLUMNS = ["consensus", "coverage", "discordance"]
 RNA_SOURCE_LABELS = {"depmap": "DepMap", "hpa": "HPA"}
 
 # How expression values are prepared before the robust z-score is computed:
-#   "log2" -> log2(TPM + 1)  (current choice: the supervisor's worked examples
-#                             only add up on a log scale; raw TPM gives z up to ~60)
-#   "tpm"  -> raw TPM
-# Still switched in ONE place, in case the supervisor wants the other.
-RNA_TRANSFORM = "log2"
+#   "tpm"  -> raw TPM  (current choice: the supervisor asked for TPM, not log TPM;
+#                       asinh in the score stops a few very high cell lines from
+#                       squashing the rest)
+#   "log2" -> log2(TPM + 1)
+# Still switched in ONE place.
+RNA_TRANSFORM = "tpm"
 
 
 def _prepare(tpm: pd.Series, transform: str) -> pd.Series:
@@ -93,19 +94,59 @@ def _prepare(tpm: pd.Series, transform: str) -> pd.Series:
     raise ValueError(f"unknown RNA transform: {transform!r} (use 'tpm' or 'log2')")
 
 
-def _robust_z(log_tpm: pd.Series) -> pd.Series:
+def _expressed_reference(tpm: pd.Series, transform: str) -> pd.Series:
+    """
+    Values used to estimate the typical level and spread of a gene (median, MAD).
+    Cell lines below EXPR_OFF_TPM (the "gene is off" cutoff, 1 TPM) are removed
+    here, so noise below 1 TPM does not set the scale. Without this, DepMap's tiny
+    continuous values (0.01, 0.02, ...) give a tiny non-zero MAD and z in the
+    thousands, while HPA (0.1 steps, many exact zeros) has MAD = 0, so the two
+    sources disagreed by orders of magnitude for the same cell line.
+    The median and MAD are therefore those of the expressed cell lines. The z-score
+    itself is still computed for every cell line from its real value, so the order of
+    cell lines is unchanged and the off lines get a z below the expressed ones.
+    """
+    tpm = tpm.astype(float).clip(lower=0)
+    return _prepare(tpm[tpm >= EXPR_OFF_TPM], transform)
+
+
+def _robust_z(values: pd.Series, reference: pd.Series | None = None) -> pd.Series:
     """
     Gene-wise robust z-score across cell lines: (x - median) / (1.4826 * MAD).
-    If MAD is 0 (most cell lines tie, e.g. TPM = 0) fall back to the standard
-    deviation; if the gene is constant, every z is 0.
+    If MAD is 0 (most reference values tie) fall back to the standard deviation of the
+    reference. If that is 0 too (the gene is constant or has no reference values),
+    every z is 0.
+    `reference` (any index) is used for the median, MAD and SD instead of the values
+    themselves (see _expressed_reference).
     """
-    med = log_tpm.median()
-    scale = (log_tpm - med).abs().median() * 1.4826
+    ref = values if reference is None else reference
+    med = ref.median()
+    scale = (ref - med).abs().median() * 1.4826
     if not np.isfinite(scale) or scale == 0:
-        scale = log_tpm.std(ddof=0)
+        scale = ref.std(ddof=0)
     if not np.isfinite(scale) or scale == 0:
-        return pd.Series(0.0, index=log_tpm.index)
-    return (log_tpm - med) / scale
+        return pd.Series(0.0, index=values.index)
+    return (values - med) / scale
+
+
+# How the RNA of one source is put on a common scale (the same for every gene):
+#   robust_z   (x - median) / (1.4826 * MAD)   the default
+#   standard_z (x - mean) / SD
+#   log2_tpm   log2(TPM + 1); no z-score, so a cell line's value does not depend on the others
+RNA_METHODS = ("robust_z", "standard_z", "log2_tpm")
+
+
+def _standard_z(values: pd.Series, reference: pd.Series | None = None) -> pd.Series:
+    """
+    Gene-wise standard z-score across cell lines: (x - mean) / SD, with the mean and SD of
+    `reference` (see _expressed_reference), so cell lines below 1 TPM do not set the scale.
+    If the SD is 0 or there are no reference values, every z is 0.
+    """
+    ref = values if reference is None else reference
+    mean, sd = ref.mean(), ref.std(ddof=0)
+    if not np.isfinite(sd) or sd == 0:
+        return pd.Series(0.0, index=values.index)
+    return (values - mean) / sd
 
 
 def _mad_is_zero(values: pd.Series) -> bool:
@@ -125,22 +166,31 @@ def get_rna_consensus(
     ensembl_id: str,
     enabled_sources: list[str] | None = None,
     transform: str | None = None,
+    method: str = "robust_z",
 ) -> pd.DataFrame:
     """
     One provenance-aware RNA signal per cell line.
 
-    Per source: prepare TPM (see RNA_TRANSFORM) -> gene-wise robust z-score across cell lines.
-      consensus   = mean of the matched robust z-scores (sources that cover the cell line)
+    Per source: prepare TPM (see RNA_TRANSFORM) -> gene-wise score across cell lines.
+    `method` (see RNA_METHODS) says which score: robust z (default), standard z, or
+    log2(TPM + 1). For both z-scores the reference (median and MAD, or mean and SD) comes
+    from the cell lines at or above 1 TPM only (those below are removed from the reference,
+    see _expressed_reference) and is then used for every cell line of that source.
+    log2(TPM + 1) has no reference: every cell line keeps its own log2 value.
+      consensus   = mean of the matched per-source scores (sources that cover the cell line)
       coverage    = number of sources used
       discordance = |z_depmap - z_hpa| when 2+ sources cover the cell line, else NaN
                     (QC only: it never changes the score or the ranking)
 
     Returns a DataFrame indexed by ach_id with columns
-    consensus, coverage, discordance, z_<source> and tpm_<source> (raw TPM,
-    used for the expression category) for each source used.
+    consensus, coverage, discordance, z_<source> (the per-source score of `method`) and
+    tpm_<source> (raw TPM, used for the expression category) for each source used.
     df.attrs["mad_zero_sources"] lists the sources where MAD = 0 for this gene
-    (z then used the SD instead; surfaced to the user as a flag).
+    (robust z then used the SD instead; surfaced to the user as a flag).
+    df.attrs["rna_method"] is `method`.
     """
+    if method not in RNA_METHODS:
+        raise ValueError(f"unknown rna_method: {method!r} (use one of {', '.join(RNA_METHODS)})")
     transform = transform or RNA_TRANSFORM
     zcols: dict[str, pd.Series] = {}
     tpmcols: dict[str, pd.Series] = {}
@@ -152,15 +202,23 @@ def get_rna_consensus(
         if len(df) < 2:
             continue
         tpm = df.set_index("ach_id")["tpm"].astype(float)
-        prepared = _prepare(tpm, transform)
-        if _mad_is_zero(prepared):
-            mad_zero_sources.append(name)
-        zcols[f"z_{name}"] = _robust_z(prepared)
+        if method == "log2_tpm":
+            zcols[f"z_{name}"] = _prepare(tpm, "log2")
+        else:
+            prepared = _prepare(tpm, transform)
+            reference = _expressed_reference(tpm, transform)
+            if method == "standard_z":
+                zcols[f"z_{name}"] = _standard_z(prepared, reference)
+            else:
+                if _mad_is_zero(reference):
+                    mad_zero_sources.append(name)
+                zcols[f"z_{name}"] = _robust_z(prepared, reference)
         tpmcols[f"tpm_{name}"] = tpm.clip(lower=0)
 
     if not zcols:
         empty = pd.DataFrame(columns=_RNA_SIGNAL_COLUMNS, dtype=float)
         empty.attrs["mad_zero_sources"] = []
+        empty.attrs["rna_method"] = method
         return empty
 
     zmat = pd.DataFrame(zcols)
@@ -173,6 +231,7 @@ def get_rna_consensus(
     })
     result = pd.concat([out, zmat, pd.DataFrame(tpmcols)], axis=1)
     result.attrs["mad_zero_sources"] = mad_zero_sources
+    result.attrs["rna_method"] = method
     return result
 
 
@@ -300,7 +359,8 @@ def get_geo_study_z(ensembl_id: str) -> pd.DataFrame | None:
         g = g.drop_duplicates("gsm_id")
         if len(g) < GEO_MIN_STUDY_SAMPLES:
             continue
-        z = _robust_z(pd.Series(_prepare(g["tpm"], RNA_TRANSFORM).to_numpy(), index=g["gsm_id"].to_numpy()))
+        tpm_g = pd.Series(g["tpm"].to_numpy(), index=g["gsm_id"].to_numpy())
+        z = _robust_z(_prepare(tpm_g, RNA_TRANSFORM), _expressed_reference(tpm_g, RNA_TRANSFORM))
         per_cl = g.assign(z=z.reindex(g["gsm_id"]).to_numpy()).groupby("ach_id")["z"].mean()
         rows.append(pd.DataFrame({
             "ach_id": per_cl.index, "gse_id": gse, "z": per_cl.to_numpy(), "n_samples": len(g),
