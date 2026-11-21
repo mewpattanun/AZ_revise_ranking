@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from app.config import DEFAULT_LOW_EXPRESSION_MODE, LOW_EXPRESSION_MODES, RRF_K
+from app.config import DEFAULT_LOW_EXPRESSION_MODE, EXPR_OFF_TPM, LOW_EXPRESSION_MODES, RRF_K
 from app.services import data_service
 
 
@@ -262,6 +262,58 @@ def _expression_info(categories: pd.DataFrame, ach_id: str) -> dict:
         "tpm_by_source": by_source,
         "sources_disagree": bool(row["sources_disagree"]),
     }
+
+
+def low_gene_notes(
+    genes: list[dict],
+    shown: list[dict],
+    candidate_ids: list[str],
+    categories_per_gene: dict[str, pd.DataFrame],
+    desirability: dict[str, pd.Series],
+    weights: dict[str, float],
+    mode: str,
+) -> list[str]:
+    """
+    Plain-language note for each LOW gene in a multi-gene (geometric mean)
+    search that had no visible effect, so "HIGH A + LOW B" looking the same as
+    "HIGH A" is not mistaken for a bug. A note is added when:
+      - every cell line shown is off (< 1 TPM) for the LOW gene, and
+      - none of the cell lines that express it (>= 1 TPM) would have been in
+        the list without it (same geometric mean, that gene left out, over the
+        cell lines that passed the filters; the Q6 boost is not included).
+    If the LOW gene did push expressing lines out of the list, there is no note:
+    its effect is visible.
+    """
+    if len(genes) < 2 or mode != "off" or not shown or not desirability:
+        return []
+    off = data_service.OFF_CATEGORIES
+    notes = []
+    for gene in genes:
+        hugo = gene["hugo"]
+        if gene["direction"] != "low":
+            continue
+        if not all(r["expression"][hugo]["category"] in off for r in shown):
+            continue
+        others = {g: s for g, s in desirability.items() if g != hugo}
+        if not others:
+            continue
+        without = weighted_geometric_mean(pd.DataFrame(others), weights)
+        without = without.reindex(candidate_ids).dropna()
+        order = pd.DataFrame({"s": without.values, "ach_id": without.index}).sort_values(
+            ["s", "ach_id"], ascending=[False, True], kind="mergesort"
+        )
+        would_show = set(order["ach_id"].head(len(shown)))
+        cats = categories_per_gene[hugo]
+        expressing = set(cats.index[~cats["category"].isin(off)])
+        if would_show & expressing:
+            continue
+        notes.append(
+            f"{hugo} (LOW) is below {EXPR_OFF_TPM:g} TPM in all {len(shown)} cell lines shown, "
+            f"so it does not separate them. None of the {len(expressing):,} cell lines that "
+            f"express {hugo} ({EXPR_OFF_TPM:g} TPM or more) would have been in this list "
+            f"without it, so there was nothing for {hugo} (LOW) to remove."
+        )
+    return notes
 
 
 def _disagree_flags(categories: pd.DataFrame) -> dict[str, list[str]]:
@@ -514,9 +566,12 @@ def run_ranking(
     include_geo: bool = False,
     multi_gene_method: str = "geometric",
     low_expression_mode: str = DEFAULT_LOW_EXPRESSION_MODE,
+    notes_out: list[str] | None = None,
 ) -> list[dict]:
     """
     Execute the full ranking pipeline. Returns list of ranked cell line dicts.
+    notes_out: if given, plain-language notes about the result are appended to
+    it (e.g. a LOW gene that does not separate the cell lines shown).
     """
     # Per-gene scoring
     combined_per_gene: dict[str, pd.DataFrame] = {}
@@ -578,6 +633,10 @@ def run_ranking(
     # Sort tier per cell line: for a single LOW gene the expression category
     # comes first ("classify first, then rank"); otherwise every tier is 0.
     single_low = len(genes) == 1 and genes[0]["direction"] == "low"
+    # Per-gene desirability and weights of the geometric mean (multi-gene only),
+    # kept for the "LOW gene had nothing to remove" note.
+    desirability: dict[str, pd.Series] = {}
+    gm_weights: dict[str, float] = {}
 
     def tier_of(ach: str) -> int:
         if not single_low:
@@ -601,7 +660,6 @@ def run_ranking(
         final_df["final_score"] = final_df["combined_score"]
     else:
         gene_ranks: dict[str, pd.Series] = {}
-        desirability: dict[str, pd.Series] = {}
         for gene in genes:
             df_g = combined_per_gene[gene["hugo"]].copy()
             # rank 1 = best for the requested direction (display + summed RRF)
@@ -614,8 +672,8 @@ def run_ranking(
         if multi_gene_method == "geometric":
             # Weighted geometric mean of per-gene desirability: one failed gene
             # meaningfully lowers the score. Missing gene = skipped (see helper).
-            weights = {g["hugo"]: float(g.get("weight", 1.0)) for g in genes}
-            multi_rrf = weighted_geometric_mean(pd.DataFrame(desirability), weights)
+            gm_weights = {g["hugo"]: float(g.get("weight", 1.0)) for g in genes}
+            multi_rrf = weighted_geometric_mean(pd.DataFrame(desirability), gm_weights)
         else:
             # Legacy: raw-sum RRF of per-gene ranks, divided by the theoretical
             # maximum (each gene at rank 1 -> n_genes x 1/(k+1)).
@@ -784,9 +842,15 @@ def run_ranking(
         for i, r in enumerate(results):
             r["rank"] = i + 1
 
+    candidate_ids = [r["ach_id"] for r in results]   # every line that passed the filters
     results = results[:top_n]
     for r in results:
         r.pop("_tier", None)
+    if notes_out is not None and multi_gene_method == "geometric":
+        notes_out.extend(low_gene_notes(
+            genes, results, candidate_ids, categories_per_gene, desirability, gm_weights,
+            low_expression_mode,
+        ))
 
     # GEO support for the returned cell lines (extra evidence only:
     # it is added after ranking and never changes score or rank)

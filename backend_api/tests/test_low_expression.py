@@ -206,3 +206,53 @@ def test_unknown_mode_is_rejected(low_data):
         RankRequest(genes=[{"hugo": "EGFR"}], low_expression_mode="lowest")
     with pytest.raises(ValueError):
         run_ranking([LOW], low_expression_mode="lowest")
+
+
+# ── Note when a LOW gene does not separate the lines shown ───
+
+def _flat_high_g2(low_data):
+    flat = {k: 5.0 for k in DEPMAP}
+    low_data["by_gene"]["ENSG_G2"] = {"fact_expression_depmap": flat, "fact_expression_hpa": flat}
+
+
+def test_note_when_low_gene_is_off_in_every_line_shown(low_data):
+    _flat_high_g2(low_data)
+    notes = []
+    results = run_ranking([HIGH_G2, LOW], top_n=4, notes_out=notes)
+    assert all(r["expression"]["G1"]["category"] in data_service.OFF_CATEGORIES for r in results)
+    assert notes == [
+        "G1 (LOW) is below 1 TPM in all 4 cell lines shown, so it does not separate them. "
+        "None of the 4 cell lines that express G1 (1 TPM or more) would have been in this list "
+        "without it, so there was nothing for G1 (LOW) to remove."
+    ]
+
+
+def test_no_note_when_low_gene_pushed_expressing_lines_out(low_data):
+    # Without G1, G and H (which express G1) would top the list. G1 LOW pushes
+    # them out, so its effect is visible and no note is needed even though every
+    # line shown is off for G1.
+    g2 = {"A": 50.0, "B": 50.0, "C": 50.0, "D": 50.0, "E": 10.0, "F": 10.0, "G": 100.0, "H": 90.0}
+    low_data["by_gene"]["ENSG_G2"] = {"fact_expression_depmap": g2, "fact_expression_hpa": g2}
+    notes = []
+    results = run_ranking([HIGH_G2, LOW], top_n=4, notes_out=notes)
+    assert {r["ach_id"] for r in results} == {"A", "B", "C", "D"}
+    assert notes == []
+
+
+def test_no_note_when_low_gene_separates_the_lines_shown(low_data):
+    _flat_high_g2(low_data)
+    notes = []
+    run_ranking([HIGH_G2, LOW], top_n=6, notes_out=notes)   # top 6 includes F and E (1-3 TPM)
+    assert notes == []
+
+
+@pytest.mark.parametrize("genes, mode", [
+    ([LOW], "off"),                    # single gene: the off group is the answer itself
+    ([HIGH_G2, LOW], "measurable"),    # other modes rank by TPM above 1, not "off"
+    ([HIGH_G2, LOW], "score"),
+])
+def test_no_note_outside_multi_gene_off_mode(low_data, genes, mode):
+    _flat_high_g2(low_data)
+    notes = []
+    run_ranking(genes, top_n=4, low_expression_mode=mode, notes_out=notes)
+    assert notes == []

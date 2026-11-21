@@ -53,6 +53,9 @@ export default function App() {
   // Backend scoring version from the last /api/rank response (shown in the
   // version badge tooltip; older backends do not send it).
   const [scoringVersion, setScoringVersion] = useState(null);
+  // Plain-language notes from the backend about the last result, e.g. a LOW
+  // gene that does not separate the cell lines shown.
+  const [notes, setNotes] = useState([]);
 
   /* Selection & panels */
   const [selected, setSelected] = useState([]);
@@ -79,6 +82,7 @@ export default function App() {
     setLoading(true);
     setError(null);
     setResults(null);
+    setNotes([]);
     setSelected([]);
 
     try {
@@ -109,6 +113,7 @@ export default function App() {
       const res = await rankCellLines(apiParams);
       setResults(res.results);
       setScoringVersion(res.query?.scoring_version ?? null);
+      setNotes(res.notes ?? []);
       setLastSearchedFilters(filters);
       setLastSearchedGenes(genes);
     } catch (err) {
@@ -320,6 +325,18 @@ export default function App() {
                 Search for target genes on the left, set your filters, then click
                 "Find Cell Lines" to rank cell lines by multi-omics expression.
               </p>
+            </div>
+          )}
+
+          {/* Notes about the result (shown only when there are results) */}
+          {!loading && displayedResults?.length > 0 && notes.length > 0 && (
+            <div className={styles.resultNotes} role="note">
+              {notes.map((n) => (
+                <p key={n} className={styles.resultNote}>
+                  <span className={styles.resultNoteIcon} aria-hidden="true">ℹ</span>
+                  {n}
+                </p>
+              ))}
             </div>
           )}
 

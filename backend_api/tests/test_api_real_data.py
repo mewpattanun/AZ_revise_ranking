@@ -128,3 +128,12 @@ def test_known_cell_lines_get_the_expected_category(gene, ach_id, expected):
     ensg = data_service.resolve_gene(gene)["ensembl_id"]
     cats = data_service.classify_expression(data_service.get_rna_consensus(ensg))
     assert cats.loc[ach_id, "category"] == expected
+
+
+def test_note_for_erbb2_high_cd3e_low(client):
+    # CD3E is a T-cell gene: every top ERBB2 line is off for it, so the API
+    # explains why adding "CD3E low" does not change the list.
+    body = _rank(client, genes=[{"hugo": "ERBB2"}, {"hugo": "CD3E", "direction": "low"}], top_n=20)
+    assert len(body["notes"]) == 1
+    assert body["notes"][0].startswith("CD3E (LOW) is below 1 TPM in all 20 cell lines shown")
+    assert _rank(client, genes=[{"hugo": "ERBB2"}, {"hugo": "ESR1", "direction": "low"}], top_n=20)["notes"] == []
