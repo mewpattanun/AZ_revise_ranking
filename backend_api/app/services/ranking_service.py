@@ -115,23 +115,30 @@ SCORING_METHODS = ("robust_z", "rrf", "zscore", "percentile")
 SCORING_SOURCE_NAMES = list(data_service.RNA_SOURCE_TABLES)
 
 
-def magnitude_score(consensus: pd.Series) -> pd.Series:
+def magnitude_score(consensus: pd.Series, rna_method: str = "robust_z") -> pd.Series:
     """
-    Score from the SIZE of the consensus robust z (keeps magnitude, unlike a rank).
+    Score from the SIZE of the consensus (keeps magnitude, unlike a rank).
 
     asinh(z) is ~z near 0 and ~log(2z) for big z, so an outlier at z = 60 does
     not squash every other cell line to ~0 when we min-max to [0, 1]. It is
     monotonic, so the order is the order of the consensus z (HIGH: biggest
     first, LOW: ascending, same as before).
+    log2(TPM + 1) values are already compressed by the log, so for rna_method
+    "log2_tpm" they are only min-maxed.
     """
-    return _norm01(np.arcsinh(consensus.astype(float)))
+    values = consensus.astype(float)
+    if rna_method == "log2_tpm":
+        return _norm01(values)
+    return _norm01(np.arcsinh(values))
 
 
 def score_expression(signal: pd.DataFrame, scoring_method: str = "robust_z") -> pd.Series:
     """
     Expression score per cell line from the RNA consensus signal.
     scoring_method:
-      "robust_z"  → magnitude of the consensus robust z (default, point 3)
+      "robust_z"  → magnitude of the RNA consensus (default, point 3). The consensus is the
+                    robust z, standard z or log2(TPM + 1) the signal was built with
+                    (signal.attrs["rna_method"], see data_service.RNA_METHODS)
       "rrf" / "zscore" / "percentile" → legacy rank-based (RRF of z-rank / pct-rank)
     """
     if scoring_method not in SCORING_METHODS:
@@ -141,7 +148,7 @@ def score_expression(signal: pd.DataFrame, scoring_method: str = "robust_z") -> 
     consensus = signal["consensus"]
 
     if scoring_method == "robust_z":
-        return magnitude_score(consensus)
+        return magnitude_score(consensus, signal.attrs.get("rna_method", "robust_z"))
 
     rank_dict: dict[str, pd.Series] = {}
     if scoring_method in ("rrf", "zscore"):
@@ -155,16 +162,18 @@ def rank_expression(
     ensembl_id: str,
     scoring_method: str = "robust_z",
     enabled_sources: list[str] | None = None,
+    rna_method: str = "robust_z",
 ) -> tuple[pd.Series, pd.Series]:
     """
     Compute the expression score for one gene.
     enabled_sources: RNA sources that feed the consensus (e.g. ["depmap", "hpa"]).
                      None means all sources.
+    rna_method: how each source is put on a common scale (data_service.RNA_METHODS).
     Returns (scores indexed by ach_id, source_coverage Series).
     """
     # DepMap + HPA share the same underlying data → one RNA consensus per cell line
     # (mean of per-source robust z-scores; discordance is QC only, see data_service)
-    signal = data_service.get_rna_consensus(ensembl_id, enabled_sources)
+    signal = data_service.get_rna_consensus(ensembl_id, enabled_sources, method=rna_method)
     if len(signal) < 2:
         return pd.Series(dtype=float), pd.Series(dtype=int)
     return score_expression(signal, scoring_method), signal["coverage"].astype(int)
@@ -246,21 +255,24 @@ def apply_low_expression_mode(expr: pd.Series, categories: pd.DataFrame, mode: s
     return out
 
 
-def _expression_info(categories: pd.DataFrame, ach_id: str) -> dict:
-    """Category and raw TPM of one cell line for one gene (shown in the results)."""
+def _expression_info(categories: pd.DataFrame, ach_id: str, consensus: pd.Series | None = None) -> dict:
+    """Category and raw TPM of one cell line for one gene (shown in the results).
+    rna_value = the RNA consensus of the chosen rna_method (robust z, standard z or log2(TPM + 1))."""
     if ach_id not in categories.index:
-        return {"category": "missing", "tpm": None, "tpm_by_source": {}, "sources_disagree": False}
+        return {"category": "missing", "tpm": None, "tpm_by_source": {}, "sources_disagree": False, "rna_value": None}
     row = categories.loc[ach_id]
     by_source = {
         c[len("tpm_"):]: round(float(row[c]), 2)
         for c in categories.columns
         if c.startswith("tpm_") and pd.notna(row[c])
     }
+    value = consensus.get(ach_id) if consensus is not None else None
     return {
         "category": row["category"],
         "tpm": round(float(row["tpm"]), 2),
         "tpm_by_source": by_source,
         "sources_disagree": bool(row["sources_disagree"]),
+        "rna_value": round(float(value), 3) if value is not None and pd.notna(value) else None,
     }
 
 
@@ -514,20 +526,26 @@ def run_ranking(
     include_geo: bool = False,
     multi_gene_method: str = "geometric",
     low_expression_mode: str = DEFAULT_LOW_EXPRESSION_MODE,
+    rna_method: str = "robust_z",
 ) -> list[dict]:
     """
     Execute the full ranking pipeline. Returns list of ranked cell line dicts.
+    rna_method: robust_z (default), standard_z or log2_tpm, see data_service.RNA_METHODS.
+    Only the RNA scale changes; protein, weights and the rest of the pipeline are the same.
     """
     # Per-gene scoring
     combined_per_gene: dict[str, pd.DataFrame] = {}
     coverage_per_gene: dict[str, pd.Series] = {}
     flags_per_gene: dict[str, dict[str, list[str]]] = {}
     categories_per_gene: dict[str, pd.DataFrame] = {}
+    consensus_per_gene: dict[str, pd.Series] = {}
 
     if multi_gene_method not in MULTI_GENE_METHODS:
         raise ValueError(f"unknown multi_gene_method: {multi_gene_method!r}")
     if low_expression_mode not in LOW_EXPRESSION_MODES:
         raise ValueError(f"unknown low_expression_mode: {low_expression_mode!r}")
+    if rna_method not in data_service.RNA_METHODS:
+        raise ValueError(f"unknown rna_method: {rna_method!r}")
     # Geometric mean needs "higher = better" for every gene, so LOW genes are
     # inverted (1 - score). Single-gene search and summed RRF keep the old scores.
     invert_low = len(genes) > 1 and multi_gene_method == "geometric"
@@ -540,7 +558,7 @@ def run_ranking(
         ensg = gene["ensembl_id"]
 
         # 1. Expression score from the RNA consensus (only selected RNA sources)
-        signal = data_service.get_rna_consensus(ensg, rna_sources)
+        signal = data_service.get_rna_consensus(ensg, rna_sources, method=rna_method)
         expr_rrf = score_expression(signal, scoring_method)
         coverage = signal["coverage"].astype(int) if len(signal) >= 2 else pd.Series(dtype=int)
         coverage_per_gene[gene["hugo"]] = coverage
@@ -549,6 +567,7 @@ def run_ranking(
         #     LOW gene it also sets the RNA score of off cell lines (priority 5).
         categories = data_service.classify_expression(signal)
         categories_per_gene[gene["hugo"]] = categories
+        consensus_per_gene[gene["hugo"]] = signal["consensus"]
         if gene["direction"] == "low":
             expr_rrf = apply_low_expression_mode(expr_rrf, categories, low_expression_mode)
 
@@ -730,7 +749,9 @@ def run_ranking(
             "score_flags": _score_flags(flags_per_gene, row["ach_id"], row.get("genes_skipped")),
             # Raw TPM + expression category per gene (priority 5)
             "expression": {
-                g["hugo"]: _expression_info(categories_per_gene[g["hugo"]], row["ach_id"])
+                g["hugo"]: _expression_info(
+                    categories_per_gene[g["hugo"]], row["ach_id"], consensus_per_gene[g["hugo"]]
+                )
                 for g in genes
             },
             "_tier": tier_of(row["ach_id"]),

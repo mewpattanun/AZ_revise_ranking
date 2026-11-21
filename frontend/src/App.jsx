@@ -6,6 +6,8 @@ import DetailPanel from "./components/DetailPanel/DetailPanel.jsx";
 import CompareView from "./components/CompareView/CompareView.jsx";
 import ChatWidget from "./components/ChatWidget/ChatWidget.jsx";
 import DocsModal from "./components/DocsModal/DocsModal.jsx";
+import MethodCompare from "./components/MethodCompare/MethodCompare.jsx";
+import { RNA_METHODS, methodLabel as rnaMethodLabel } from "./compareMethods";
 import { rankCellLines } from "./api";
 import { exportResultsCsv } from "./exportCsv";
 import { VERSION_LABEL, GIT_COMMIT, BUILD_DATE } from "./version";
@@ -33,6 +35,8 @@ const DEFAULT_FILTERS = {
   mirna_threshold: null,
   // What "low" means for LOW genes (AZ priority 5): "off" | "measurable"
   low_expression_mode: "off",
+  // How each RNA source is put on a common scale: "robust_z" (default) | "standard_z" | "log2_tpm"
+  rna_method: "robust_z",
 };
 
 export default function App() {
@@ -58,6 +62,7 @@ export default function App() {
   const [selected, setSelected] = useState([]);
   const [detailId, setDetailId] = useState(null);
   const [showCompare, setShowCompare] = useState(false);
+  const [methodCompareQuery, setMethodCompareQuery] = useState(null); // query shown in the RNA method comparison
   const [docsTab, setDocsTab] = useState(null); // null = closed, "docs" | "sources" | "methods" | "about"
 
   /* Gene management */
@@ -73,6 +78,41 @@ export default function App() {
     setFilters(newFilters);
   }, []);
 
+  /* Request body for /api/rank from the current genes and filters */
+  function buildApiParams() {
+    // Protein is always included in scoring (only the 3 RNA sources are
+    // user-toggleable), so ensure "protein" is always in sources.
+    const sourcesWithProtein = filters.sources.includes("protein")
+      ? filters.sources
+      : [...filters.sources, "protein"];
+
+    // Route disease/lineage/subtype to filter or boost params based on mode
+    const isBoost = filters.filter_mode === "boost";
+    const apiParams = {
+      genes: genes.map((g) => ({ hugo: g.hugo, direction: g.direction })),
+      ...filters,
+      sources: sourcesWithProtein,
+      // In boost mode: clear hard filters, set Q6 targets
+      disease_filter: isBoost ? null : filters.disease_filter,
+      lineage_filter: isBoost ? null : filters.lineage_filter,
+      subtype_filter: isBoost ? null : filters.subtype_filter,
+      target_disease: isBoost ? filters.disease_filter : null,
+      target_lineage: isBoost ? filters.lineage_filter : null,
+      target_subtype: isBoost ? filters.subtype_filter : null,
+      q6_boost_enabled: isBoost,
+    };
+    // frontend-only fields, don't send them
+    delete apiParams.filter_mode;
+    delete apiParams.driver_only;
+    return apiParams;
+  }
+
+  /* Rank the same query with the three RNA methods and show them side by side */
+  function openMethodCompare() {
+    if (genes.length === 0) return;
+    setMethodCompareQuery({ genes, params: buildApiParams() });
+  }
+
   /* Run ranking */
   async function handleSearch() {
     if (genes.length === 0) return;
@@ -82,31 +122,7 @@ export default function App() {
     setSelected([]);
 
     try {
-      // Protein is always included in scoring (only the 3 RNA sources are
-      // user-toggleable), so ensure "protein" is always in sources.
-      const sourcesWithProtein = filters.sources.includes("protein")
-        ? filters.sources
-        : [...filters.sources, "protein"];
-
-      // Route disease/lineage/subtype to filter or boost params based on mode
-      const isBoost = filters.filter_mode === "boost";
-      const apiParams = {
-        genes: genes.map((g) => ({ hugo: g.hugo, direction: g.direction })),
-        ...filters,
-        sources: sourcesWithProtein,
-        // In boost mode: clear hard filters, set Q6 targets
-        disease_filter: isBoost ? null : filters.disease_filter,
-        lineage_filter: isBoost ? null : filters.lineage_filter,
-        subtype_filter: isBoost ? null : filters.subtype_filter,
-        target_disease: isBoost ? filters.disease_filter : null,
-        target_lineage: isBoost ? filters.lineage_filter : null,
-        target_subtype: isBoost ? filters.subtype_filter : null,
-        q6_boost_enabled: isBoost,
-      };
-      // filter_mode is frontend-only, don't send it
-      delete apiParams.filter_mode;
-
-      const res = await rankCellLines(apiParams);
+      const res = await rankCellLines(buildApiParams());
       setResults(res.results);
       setScoringVersion(res.query?.scoring_version ?? null);
       setLastSearchedFilters(filters);
@@ -212,6 +228,35 @@ export default function App() {
           </div>
 
           <div className={styles.sidebarSection}>
+            <h2 className={styles.sidebarTitle}>RNA Normalisation</h2>
+            <div className={styles.methodToggle}>
+              {RNA_METHODS.map((m) => (
+                <button
+                  key={m.value}
+                  className={`${styles.methodBtn} ${filters.rna_method === m.value ? styles.methodActive : ""}`}
+                  onClick={() => handleFilterChange({ ...filters, rna_method: m.value })}
+                >
+                  {m.short}
+                </button>
+              ))}
+            </div>
+            <p className={styles.methodHint}>
+              How each RNA source (DepMap, HPA) is put on a common scale before the two are averaged.
+              <b> Robust z</b> = (x - median) / (1.4826 x MAD), the default.
+              <b> Standard z</b> = (x - mean) / SD.
+              <b> log2 TPM</b> = log2(TPM + 1), no z-score.
+              Both z-scores take their reference from cell lines at or above 1 TPM only.
+            </p>
+            <button
+              className={styles.compareBtn}
+              onClick={openMethodCompare}
+              disabled={genes.length === 0}
+            >
+              Compare the 3 methods
+            </button>
+          </div>
+
+          <div className={styles.sidebarSection}>
             <FilterPanel
               filters={filters}
               onChange={handleFilterChange}
@@ -277,7 +322,7 @@ export default function App() {
                   Showing <b>{displayedResults.length}</b> cell lines · Ranked by{" "}
                   <b>
                     {/* Backend defaults: scoring_method=robust_z, multi_gene_method=geometric */}
-                    Robust Z-Score
+                    {rnaMethodLabel(lastSearchedFilters?.rna_method || "robust_z")}
                     {lastSearchedGenes?.length > 1 && " + Geometric Mean"}
                   </b>
                 </span>
@@ -345,6 +390,7 @@ export default function App() {
           genes={genes}
           resultRow={displayedResults?.find((r) => r.ach_id === detailId)}
           maxScore={maxScore}
+          rnaMethod={lastSearchedFilters?.rna_method || "robust_z"}
           wRna={filters.w_rna}
           wProtein={filters.w_protein}
           mutationMode={filters.mutation_mode}
@@ -359,6 +405,15 @@ export default function App() {
           achIds={selected}
           genes={genes}
           onClose={() => setShowCompare(false)}
+        />
+      )}
+
+      {/* RNA method comparison modal */}
+      {methodCompareQuery && (
+        <MethodCompare
+          genes={methodCompareQuery.genes}
+          params={methodCompareQuery.params}
+          onClose={() => setMethodCompareQuery(null)}
         />
       )}
 

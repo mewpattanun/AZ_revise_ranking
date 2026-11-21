@@ -2,8 +2,9 @@ import { Fragment, useState, useEffect } from "react";
 import { getCellLineEvidence, getSimilarCellLines } from "../../api";
 import styles from "./DetailPanel.module.css";
 import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
+import { methodLabel as rnaMethodLabel } from "../../compareMethods";
 
-export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose }) {
+export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", rnaMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [similar, setSimilar] = useState(null);
@@ -98,6 +99,11 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
           <div className={styles.loading}>No evidence data available</div>
         ) : (
           <div className={styles.body}>
+            {rnaMethod !== "robust_z" && (
+              <div className={styles.methodNote}>
+                The results table uses <b>{rnaMethodLabel(rnaMethod)}</b>. The z-scores and ranks below are always robust z.
+              </div>
+            )}
             {/* ── Per-gene expression cards ── */}
             <div className={styles.geneCards}>
               {genes.map((g) => {
@@ -172,8 +178,8 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                     )}
                     {gd.rna_consensus?.mad_zero_sources?.length > 0 && (
                       <div className={styles.geneCardSub} style={{ color: "#856404" }}>
-                        ⚠ MAD = 0 in {gd.rna_consensus.mad_zero_sources.join(" + ")}: most cell lines
-                        have the same value, so the standard deviation was used for the z-score.
+                        ⚠ MAD = 0 in {gd.rna_consensus.mad_zero_sources.join(" + ")}: most cell lines at or above
+                        1 TPM have the same value, so the standard deviation was used for the z-score.
                       </div>
                     )}
                   </div>
@@ -577,7 +583,7 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
               <h4 className={styles.methodTitle}>Scoring Method</h4>
               <p className={styles.methodText}>
                 {scoringMethod === "robust_z" && (
-                  <>Expression scored from the <code>size</code> of one RNA consensus robust z (DepMap + HPA, log2(TPM+1), median/MAD), compressed with <code>asinh</code> and scaled to 0–1. Rank is the sorted score, so a cell line far above the rest scores clearly higher than one just above the median.</>
+                  <>Expression scored from the <code>size</code> of one RNA consensus robust z (DepMap + HPA, TPM, median/MAD), compressed with <code>asinh</code> and scaled to 0–1. Rank is the sorted score, so a cell line far above the rest scores clearly higher than one just above the median.</>
                 )}
                 {scoringMethod === "rrf" && (
                   <>Expression ranked via <code>Z-Score</code> + <code>Percentile</code> on a single RNA consensus (robust z, DepMap + HPA), combined with <code>Reciprocal Rank Fusion</code> (k=60).</>

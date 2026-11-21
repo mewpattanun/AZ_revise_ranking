@@ -27,7 +27,7 @@ Researchers specify target genes with desired expression directions, and the sys
 
 Base case: one or more genes, each with a direction (HIGH or LOW).
 
-1. **RNA**: DepMap and HPA are each converted to log2(TPM+1) and standardised per gene with a robust z-score, `(x - median) / (1.4826 * MAD)`. The two sources are averaged into one RNA consensus. If MAD = 0 the standard deviation is used instead and the result is flagged with a warning. The difference between the two sources is kept as a QC value only.
+1. **RNA**: DepMap and HPA are each taken as TPM (no log) and standardised per gene (the median and MAD are estimated after removing the cell lines below 1 TPM, so DepMap's tiny values and HPA's 0.1 steps give similar z for the same cell line; every cell line still gets a z from its real value, so the order is unchanged) with a robust z-score, `(x - median) / (1.4826 * MAD)`. The two sources are averaged into one RNA consensus. If MAD = 0 (most cell lines at or above 1 TPM share one value) the standard deviation is used instead and the result is flagged with a warning. If no cell line is at or above 1 TPM, every z is 0. The difference between the two sources is kept as a QC value only.
 2. **Protein**: the same robust z-score.
 3. **Score (0 to 1)**: `asinh(z)` scaled to 0 to 1. RNA and protein are combined 0.7 / 0.3 (RNA only is capped at 0.7).
 4. **Several genes**: each gene gives a 0 to 1 score (LOW genes are flipped: `1 - score`). They are combined with a weighted geometric mean `exp( sum(w * log(D + eps)) / sum(w) )`, `eps = 0.000001`, equal weights by default. A cell line with no data for a gene is scored on the other genes and flagged.
@@ -36,6 +36,8 @@ Base case: one or more genes, each with a direction (HIGH or LOW).
 7. **Low expression** (classify first, then rank): every cell line gets a category from raw TPM: below detection (< 0.1), negligible (< 1), low measurable (1 to 3) or moderate (> 3). The highest source decides, so a line is only off when DepMap and HPA agree. For a LOW gene, `low_expression_mode` sets the order: `off` (default) puts off lines first, tied on RNA; `measurable` puts 1 to 3 TPM first and off lines last; `score` is the old behaviour. Thresholds are in `config.py`, and the check against known negative cell lines is in [docs/benchmarks/2026-11-08_low_expression_thresholds.md](docs/benchmarks/2026-11-08_low_expression_thresholds.md).
 
 The older methods (`rrf`, `zscore`, `percentile`, and summed RRF for several genes) can still be selected with the API fields `scoring_method` and `multi_gene_method`.
+
+The sidebar also has an **RNA Normalisation** switch (API field `rna_method`) that changes how the RNA sources are put on a common scale: `robust_z` (default, above), `standard_z` (`(x - mean) / SD`, mean and SD from cell lines at or above 1 TPM only) and `log2_tpm` (`log2(TPM + 1)`, no z-score and no reference). Only the RNA step changes; protein, weights and filters stay the same. The **Compare the 3 methods** button ranks the same query three times and shows the ranks, RNA values and scores side by side. Robust z stays the default; the other two are for comparison and are not confirmed with the advisor.
 
 Check the multi-gene rule against 6 scenarios (no database needed): `python backend_api/compare_multigene.py`
 
@@ -58,7 +60,7 @@ Scope so far: gene + direction only. The mutation, fusion, MSI/CIN, metabolite a
 |---|---|---|
 | 1 | Remove pooled GEO | Done |
 | 2 | Collapse RNA provenance (one RNA consensus) | Done |
-| 3 | Preserve magnitude (robust z, log2) | Done |
+| 3 | Preserve magnitude (robust z, TPM) | Done |
 | - | GEO support card | Done |
 | 4 | Weighted geometric mean for several genes | Done |
 | 5 | Detectable low expression | Done (1 TPM off cutoff; gene-relative rule not done) |
@@ -67,11 +69,11 @@ Scope so far: gene + direction only. The mutation, fusion, MSI/CIN, metabolite a
 | 8 | Rename confidence | Not started |
 | 9 | Context + validation | Not started |
 
-**Decisions not yet confirmed with the advisor:** asinh + min-max to map z to 0 to 1; protein also uses robust z; SD fallback when MAD = 0; GEO thresholds (at least 10 samples, |z| >= 1, majority rule); skip a gene with no data and renormalise the weights; `eps = 0.000001`.
+**Decisions not yet confirmed with the advisor:** asinh + min-max to map z to 0 to 1; protein also uses robust z; removing cell lines below 1 TPM before the median and MAD (the 1 TPM cutoff); SD fallback when MAD = 0; GEO thresholds (at least 10 samples, |z| >= 1, majority rule); skip a gene with no data and renormalise the weights; `eps = 0.000001`.
 
 **Checked on real data:** old (v2.1) vs new rankings for 6 benchmark queries with positive controls, in [docs/benchmarks/2026-11-07_az_revision_v2_vs_v3.md](docs/benchmarks/2026-11-07_az_revision_v2_vs_v3.md). It shows that cell lines without protein data (e.g. SKBR3, BT474, A431) drop well down because "RNA only" is capped at 0.7 (priority 6).
 
-**Not yet checked on real data:** web results after the switch to log2 (for example EGFR); genes with MAD = 0 beyond the tie order.
+**Not yet checked on real data:** web results after the switch to TPM (for example EGFR); genes with MAD = 0 beyond the tie order; genes with only a few cell lines at or above 1 TPM (their median and MAD are unstable).
 
 **Known issue (priority 6):** in LOW searches a cell line without protein data is still treated as if its protein were zero, so inside the off group RNA-only lines come before lines with measured protein.
 
