@@ -83,7 +83,14 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
           </div>
           <div className={styles.headerRight}>
             {score != null && (
-              <div className={styles.detailScore} style={{ background: scoreColor }}>{score.toFixed(2)}</div>
+              <div className={styles.scoreStack}>
+                <div className={styles.detailScore} style={{ background: scoreColor }}>{score.toFixed(2)}</div>
+                {resultRow?.modality_coverage != null && (
+                  <div className={styles.coverageLabel}>
+                    Coverage: {resultRow.modality_coverage.toFixed(2)}
+                  </div>
+                )}
+              </div>
             )}
             <button className={styles.closeBtn} onClick={onClose}>×</button>
           </div>
@@ -200,9 +207,13 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                   </>
                 ) : (
                   <>
-                    <div className={styles.geneCardRank}>No protein data</div>
+                    <div className={styles.geneCardRank}>Not measured</div>
                     <div className={styles.geneCardSub}>
-                      {genes[0]?.hugo}: not detected in Gygi proteomics
+                      {genes[0]?.hugo}: not profiled in Gygi proteomics
+                      <br />
+                      <span style={{ color: "#999", fontSize: "11px" }}>
+                        "Not measured" ≠ "measured as zero" — no information available
+                      </span>
                     </div>
                   </>
                 )}
