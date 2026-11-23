@@ -24,6 +24,7 @@ const DEFAULT_FILTERS = {
   subtype_filter: null,
   filter_mode: "filter",  // "filter" = hard exclude, "boost" = Q6 soft boost
   core_only: false,
+  require_protein: false,
   top_n: 20,
   sources: ["depmap", "hpa"],
   assay_type: null,
