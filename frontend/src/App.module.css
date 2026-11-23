@@ -238,6 +238,33 @@
   color: #2d6a4f;
 }
 
+/* Notes about the result (e.g. a LOW gene that does not separate the lines) */
+.resultNotes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.resultNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--clr-primary-light);
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: #1e3a8a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.resultNoteIcon {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
 /* Stale-results banner */
 .staleBanner {
   background: #fff8e1;

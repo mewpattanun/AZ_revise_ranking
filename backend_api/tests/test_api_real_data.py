@@ -143,3 +143,12 @@ def test_protein_100_percent_has_no_rna_only_lines(client):
 def test_both_weights_zero_returns_422(client):
     res = client.post("/api/rank", json={"genes": [{"hugo": "EGFR"}], "w_rna": 0, "w_protein": 0})
     assert res.status_code == 422
+
+
+def test_note_for_erbb2_high_cd3e_low(client):
+    # CD3E is a T-cell gene: every top ERBB2 line is off for it, so the API
+    # explains why adding "CD3E low" does not change the list.
+    body = _rank(client, genes=[{"hugo": "ERBB2"}, {"hugo": "CD3E", "direction": "low"}], top_n=20)
+    assert len(body["notes"]) == 1
+    assert body["notes"][0].startswith("CD3E (LOW) is below 1 TPM in all 20 cell lines shown")
+    assert _rank(client, genes=[{"hugo": "ERBB2"}, {"hugo": "ESR1", "direction": "low"}], top_n=20)["notes"] == []
