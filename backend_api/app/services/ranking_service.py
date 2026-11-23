@@ -254,7 +254,6 @@ def apply_low_expression_mode(expr: pd.Series, categories: pd.DataFrame, mode: s
         out[off] = float(expr.max()) + 1e-6 * span
     return out
 
-
 def apply_low_expression_to_protein(
     prot_rrf: pd.Series,
     categories: pd.DataFrame,
@@ -296,7 +295,6 @@ def apply_low_expression_to_protein(
     else:
         out[off_in_prot] = float(prot_rrf.max()) + 1e-6 * span
     return out
-
 
 def _expression_info(categories: pd.DataFrame, ach_id: str, consensus: pd.Series | None = None) -> dict:
     """Category and raw TPM of one cell line for one gene (shown in the results).
@@ -375,25 +373,11 @@ def combine_rna_protein(
     invert: bool = False,
 ) -> pd.DataFrame:
     """
-    Combine expression and protein scores (P6: score and coverage are separate).
-
-    The score is the weighted mean over the data types the cell line HAS, so a
-    missing data type is not counted as zero:
-      RNA+Protein  : (w_rna * RNA + w_prot * protein) / (w_rna + w_prot)
-      RNA only     : RNA score
-      Protein only : protein score
-    A data type with weight 0 carries no evidence: a cell line whose only data
-    type has weight 0 (e.g. RNA only with protein at 100%) is left out, because
-    under those weights there is nothing to score it on.
-    modality_coverage = share of the total weight the cell line has data for.
-
+    Combine expression and protein scores.
     invert=True flips both to "low is good" (1 - score), used for LOW genes in
     multi-gene searches so that a higher score is always better.
     Returns DataFrame with: ach_id, combined_score, scenario, modality_coverage.
     """
-    w_total = w_rna + w_prot
-    if w_total <= 0:
-        raise ValueError("w_rna and w_protein cannot both be 0")
     expr_norm = _norm01(expr_rrf)
     prot_norm = _norm01(prot_rrf)
     if invert:
@@ -405,30 +389,23 @@ def combine_rna_protein(
     for ach in all_ids:
         if ach is None or (isinstance(ach, float) and np.isnan(ach)):
             continue
-        # What data the cell line HAS (shown as the scenario) ...
         has_rna = ach in expr_norm.index and not np.isnan(expr_norm.get(ach, np.nan))
         has_prot = ach in prot_norm.index and not np.isnan(prot_norm.get(ach, np.nan))
+
         if has_rna and has_prot:
+            score = w_rna * expr_norm[ach] + w_prot * prot_norm[ach]
             scenario = "RNA+Protein"
+            modality_coverage = 1.0
         elif has_rna:
+            score = float(expr_norm[ach])
             scenario = "RNA only"
+            modality_coverage = w_rna
         elif has_prot:
+            score = float(prot_norm[ach])
             scenario = "Protein only"
+            modality_coverage = w_prot
         else:
             continue
-
-        # ... and what counts in the score: only data types with weight > 0.
-        use_rna = has_rna and w_rna > 0
-        use_prot = has_prot and w_prot > 0
-        if use_rna and use_prot:
-            score = (w_rna * expr_norm[ach] + w_prot * prot_norm[ach]) / w_total
-        elif use_rna:
-            score = float(expr_norm[ach])
-        elif use_prot:
-            score = float(prot_norm[ach])
-        else:
-            continue   # its only data type has weight 0: nothing to score it on
-        modality_coverage = ((w_rna if use_rna else 0.0) + (w_prot if use_prot else 0.0)) / w_total
 
         rows.append({
             "ach_id": ach,
@@ -711,19 +688,19 @@ def run_ranking(
 
         rows = []
         for ach in multi_rrf.index:
-            coverages = []
+            confidences = []
             scenarios = []
             for gene in genes:
                 gdf = combined_per_gene[gene["hugo"]]
                 match = gdf[gdf["ach_id"] == ach]
                 if len(match) > 0:
-                    coverages.append(match["modality_coverage"].iloc[0])
+                    confidences.append(match["modality_coverage"].iloc[0])
                     scenarios.append(match["scenario"].iloc[0])
 
             rows.append({
                 "ach_id": ach,
                 "final_score": float(multi_rrf[ach]),
-                "modality_coverage": float(np.mean(coverages)) if coverages else 0.0,
+                "modality_coverage": float(np.mean(confidences)) if confidences else 0.0,
                 "scenario": " | ".join(scenarios),
                 # genes this cell line has no score for (skipped in the geometric mean)
                 "genes_skipped": [
@@ -772,12 +749,9 @@ def run_ranking(
 
         if core_only and not is_core:
             continue
-
-        # Require protein: at least one searched gene has protein data
-        # (how this should work for several genes is still to be decided).
+        
         if require_protein and "Protein" not in str(row.get("scenario", "")):
             continue
-
         # Collect mutations for include mode
         mutations = None
         if mutation_mode == "include":
@@ -814,6 +788,7 @@ def run_ranking(
             "lineage": cl.get("lineage"),
             "growth_pattern": cl.get("growth_pattern"),
             "score": round(float(row[score_col]), 4),
+            "confidence": round(float(row["modality_coverage"]), 2),
             "modality_coverage": round(float(row["modality_coverage"]), 2),
             "scenario": row.get("scenario", ""),
             "is_core": is_core,

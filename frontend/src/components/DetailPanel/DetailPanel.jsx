@@ -41,6 +41,7 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
   if (!achId) return null;
 
   const score = resultRow?.score;
+  const confidence = resultRow?.confidence;
   const scenario = resultRow?.scenario;
 
   // Colour the score using RAW score value (same thresholds as the results table).
@@ -212,14 +213,12 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                   </>
                 ) : (
                   <>
-                    <div className={styles.geneCardRank}>No protein value</div>
+                    <div className={styles.geneCardRank}>Not measured</div>
                     <div className={styles.geneCardSub}>
-                      {/* Either the cell line is not in the Gygi study, or it is but this
-                          protein was not detected (e.g. ESR1: no value in any of the 375). */}
-                      {genes[0]?.hugo}: no protein value in Gygi proteomics
+                      {genes[0]?.hugo}: not profiled in Gygi proteomics
                       <br />
                       <span style={{ color: "#999", fontSize: "11px" }}>
-                        "No value" ≠ "measured as zero" — no information available
+                        "Not measured" ≠ "measured as zero" — no information available
                       </span>
                     </div>
                   </>
