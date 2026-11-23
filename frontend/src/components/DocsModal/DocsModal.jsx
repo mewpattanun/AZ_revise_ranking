@@ -264,14 +264,11 @@ function MethodsContent() {
         with user-configurable weights (default: 70% RNA, 30% Protein):
       </p>
       <code className={styles.formula}>
-        combined_score = (w_rna × RNA_norm + w_protein × Protein_norm) / (w_rna + w_protein)
+        combined_score = w_rna × RNA_norm + w_protein × Protein_norm
       </code>
       <p>
         Cell lines with only RNA or only protein data are scored on whichever
-        layer is available, so missing data is not counted as zero. A layer with
-        weight 0 is not used: with protein at 100%, cell lines without protein data
-        are left out. The Coverage column shows how much of the weight a cell line
-        has data for (1.00 = RNA and protein).
+        layer is available, with the confidence field reflecting partial coverage.
       </p>
 
       <h4>Step 4: Multi-Gene Combination</h4>
