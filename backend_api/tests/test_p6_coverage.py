@@ -117,3 +117,55 @@ def test_low_off_tier_is_tied_under_mixed_coverage(fake_data):
 
     # Tiebreak by ach_id, so A, B, C, D in alphabetical order.
     assert [r["ach_id"] for r in top4] == ["A", "B", "C", "D"]
+
+
+# Follow-up: a data type with weight 0 carries no evidence
+
+def test_protein_at_100_percent_leaves_out_rna_only_cells(fake_data):
+    """
+    With RNA 0% / protein 100%, an RNA-only cell line has nothing to be scored
+    on. Before the fix it was ranked on RNA alone (e.g. HSC1 and A431 in the
+    EGFR top 10), even though the user set RNA to 0%.
+    """
+    fake_data["protein"] = {"B": 50.0, "C": 20.0}   # A and D are RNA-only
+    results = run_ranking([HIGH], w_rna=0.0, w_protein=1.0, top_n=10)
+    assert [r["ach_id"] for r in results] == ["B", "C"]          # ordered by protein only
+    assert all(r["modality_coverage"] == 1.0 for r in results)
+
+
+def test_rna_at_100_percent_scores_on_rna_only(fake_data):
+    """With protein at 0%, protein is ignored: order = RNA order, coverage = 1."""
+    fake_data["protein"] = {"D": 999.0, "C": 1.0}   # strong protein must not help D
+    results = run_ranking([HIGH], w_rna=1.0, w_protein=0.0, top_n=10)
+    assert [r["ach_id"] for r in results] == ["A", "B", "C", "D"]
+    assert all(r["modality_coverage"] == 1.0 for r in results)
+
+
+def test_scores_stay_on_one_scale_when_weights_do_not_add_up_to_1(fake_data):
+    """
+    The API takes w_rna and w_protein separately. The RNA+Protein score is
+    divided by their total, so it stays on the same 0-1 scale as RNA-only
+    scores and the order matches weights that do add up to 1.
+    """
+    fake_data["protein"] = {"A": 50.0, "B": 40.0, "C": 10.0}
+    scaled = run_ranking([HIGH], w_rna=0.35, w_protein=0.15, top_n=10)   # 70:30, total 0.5
+    normal = run_ranking([HIGH], w_rna=0.7, w_protein=0.3, top_n=10)
+    assert [(r["ach_id"], r["score"]) for r in scaled] == [(r["ach_id"], r["score"]) for r in normal]
+    assert max(r["score"] for r in scaled) <= 1.0
+
+
+def test_both_weights_zero_is_rejected(fake_data):
+    from pydantic import ValidationError
+    from app.models import RankRequest
+
+    with pytest.raises(ValidationError):
+        RankRequest(genes=[{"hugo": "EGFR"}], w_rna=0.0, w_protein=0.0)
+    with pytest.raises(ValueError):
+        run_ranking([HIGH], w_rna=0.0, w_protein=0.0)
+
+
+def test_response_has_no_duplicate_confidence_field(fake_data):
+    """modality_coverage replaces the old "confidence" field (same number)."""
+    result = run_ranking([HIGH], top_n=1)[0]
+    assert "modality_coverage" in result
+    assert "confidence" not in result
