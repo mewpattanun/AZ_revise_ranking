@@ -98,6 +98,22 @@ Negatives caught when both sources must agree:
 
 Inside the off group, ranks are ties. The rank number inside the group only reflects protein (where measured) and the ACH-ID tie rule, so treat the whole group as equally "off".
 
+### 2e. Multi-gene searches: firm push-down (added 2026-11-24)
+
+After the RNA normalisation switch, z-scores use only expressed cell lines (>= 1 TPM) as the reference. For ESR1, the median of the expressed lines is 2.7 TPM. As a result, a line with 3 TPM looked "average" and lost very little desirability as a LOW gene (HCC1954: 0.78, compared with 1.00 for off lines). In ERBB2 HIGH + ESR1 LOW, its very high ERBB2 kept it at #17.
+
+The fix: multi-gene searches now use the same "classify first" tiers as single-gene searches. Each line's tier is its worst tier over the LOW genes, and the geometric mean orders lines within a tier.
+
+| Search | Line (LOW-gene TPM) | Before | After |
+|---|---|---|---|
+| ERBB2 HIGH + ESR1 LOW | HCC1954 (3.1) | #17 | #1465 |
+| | EFM192A (6.0) | #29 | #1466 |
+| | UACC893 (2.3) | #15 | #1371 |
+| TAL1 HIGH + TAL2 LOW | F36P (6.0) | n/a | #1508 |
+| | K562 (1.9) | n/a | #1426 |
+
+1,370 lines are off for ESR1 and 1,424 for TAL2, so expressing lines now come straight after the off group. ERBB2 HIGH + CD3E LOW is unchanged, because no top ERBB2 line expresses CD3E. Mode `score` keeps the old, milder behaviour for comparison.
+
 ## 3. Known limitations
 
 1. **Off only relative to the gene's normal level.** Examples are HCC1954 ESR1 (~3 TPM against ~40 TPM in ER+ lines) and VIM in epithelial lines (2–4 TPM against 2,000+ TPM in mesenchymal lines). A fixed TPM cutoff cannot call these off. A gene-relative rule ("below X% of the level in expressing lines") could be added later as a flag.

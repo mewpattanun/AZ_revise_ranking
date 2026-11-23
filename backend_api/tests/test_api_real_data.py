@@ -152,3 +152,12 @@ def test_note_for_erbb2_high_cd3e_low(client):
     assert len(body["notes"]) == 1
     assert body["notes"][0].startswith("CD3E (LOW) is below 1 TPM in all 20 cell lines shown")
     assert _rank(client, genes=[{"hugo": "ERBB2"}, {"hugo": "ESR1", "direction": "low"}], top_n=20)["notes"] == []
+
+
+def test_erbb2_high_esr1_low_pushes_esr1_expressing_lines_below_off_lines(client):
+    # HCC1954 (ESR1 ~3 TPM) stayed at #17 when the LOW gene only lowered the
+    # geometric mean a little. Now every ESR1-off line comes first.
+    body = _rank(client, genes=[{"hugo": "ERBB2"}, {"hugo": "ESR1", "direction": "low"}], top_n=200)
+    cats = [r["expression"]["ESR1"]["category"] for r in body["results"]]
+    assert all(c in OFF for c in cats)                      # 1,370 lines are off, so the top 200 all are
+    assert "HCC1954" not in {r["cell_line_name"] for r in body["results"]}

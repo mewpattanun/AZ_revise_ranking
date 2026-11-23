@@ -230,12 +230,18 @@ function MethodsContent() {
 
       <h4>Step 1b: Expression Categories and Low Expression</h4>
       <p>
-        Every cell line also gets an expression category from its raw TPM, shown in
-        the Expression column: <strong>Below detection</strong> (&lt; 0.1 TPM in every
-        source), <strong>Negligible</strong> (&lt; 1 TPM in every source),{" "}
+        Every cell line also gets an expression category from its raw TPM:{" "}
+        <strong>Below detection</strong> (&lt; 0.1 TPM in every source),{" "}
+        <strong>Negligible</strong> (&lt; 1 TPM in every source),{" "}
         <strong>Low measurable</strong> (1–3 TPM) or <strong>Moderate</strong> (&gt; 3 TPM).
         A cell line is only called off when DepMap and HPA both agree; if one source says
         off and the other says expressed, it is marked with ⚠.
+      </p>
+      <p>
+        The Expression column shows the TPM (mean of DepMap and HPA; hover for each
+        source). A <strong>&lt; 1 TPM</strong> flag is shown only when the gene is off,
+        i.e. below 1 TPM in both sources; at 1 TPM or more only the number is shown.
+        The full category is still used for ranking and is included in the CSV export.
       </p>
       <p>
         For a LOW gene the category is applied first, then the score: the lowest number is
@@ -246,6 +252,13 @@ function MethodsContent() {
         DepMap and HPA agree before those where one source says off) and off cell lines go
         last. The 1 TPM cutoff was checked against known negative cell lines and
         DepMap–HPA agreement (see the threshold benchmark in the repository).
+      </p>
+      <p>
+        The same order applies in multi-gene searches: with <strong>TPM below 1</strong>,
+        every cell line where all LOW genes are off comes before any line that expresses
+        one of them, and the geometric mean (Step 4) only orders lines within each group.
+        For example, in ERBB2 HIGH + ESR1 LOW, HCC1954 (very high ERBB2 but ESR1 3 TPM)
+        comes after every ESR1-off line.
       </p>
 
       <h4>Step 2: Protein Scoring</h4>

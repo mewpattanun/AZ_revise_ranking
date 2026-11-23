@@ -1,27 +1,29 @@
 import styles from "./ResultsTable.module.css";
 import React from "react";
-import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
+import { formatTpm, expressionTooltip, isOff, OFF_FLAG, DISAGREE_HINT } from "../../expression";
 
-// Raw TPM + expression category for each searched gene (AZ priority 5)
+// Raw TPM for each searched gene; the "< 1 TPM" flag only when the gene is off
+// (AZ request), and ⚠ when DepMap and HPA disagree on off vs expressed.
 function ExpressionCell({ expression }) {
   const entries = Object.entries(expression || {});
   if (entries.length === 0) return <span style={{ color: "#bbb" }}>—</span>;
   const multi = entries.length > 1;
   return (
     <div className={styles.exprList}>
-      {entries.map(([hugo, info]) => {
-        const cat = categoryInfo(info.category);
-        return (
-          <div key={hugo} className={styles.exprRow} title={expressionTooltip(info)}>
-            {multi && <span className={styles.exprGene}>{hugo}</span>}
-            <span className={styles.exprTpm}>{formatTpm(info)}</span>
-            <span className={styles.exprPill} style={{ color: cat.color, background: cat.bg }}>
-              {cat.label}
-              {info.sources_disagree && " ⚠"}
+      {entries.map(([hugo, info]) => (
+        <div key={hugo} className={styles.exprRow} title={expressionTooltip(info)}>
+          {multi && <span className={styles.exprGene}>{hugo}</span>}
+          <span className={styles.exprTpm}>{formatTpm(info)}</span>
+          {isOff(info) && (
+            <span className={styles.exprPill} style={{ color: OFF_FLAG.color, background: OFF_FLAG.bg }}>
+              {OFF_FLAG.label}
             </span>
-          </div>
-        );
-      })}
+          )}
+          {info.sources_disagree && (
+            <span className={styles.exprWarn} aria-label={DISAGREE_HINT}>⚠</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

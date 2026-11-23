@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect } from "react";
 import { getCellLineEvidence, getSimilarCellLines } from "../../api";
 import styles from "./DetailPanel.module.css";
-import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
+import { formatTpm, expressionTooltip, isOff, OFF_FLAG } from "../../expression";
 import { methodLabel as rnaMethodLabel } from "../../compareMethods";
 
 export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", rnaMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose, sensitivity = null }) {
@@ -137,13 +137,15 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                     )}
                     {resultRow?.expression?.[g.hugo] && (() => {
                       const info = resultRow.expression[g.hugo];
-                      const cat = categoryInfo(info.category);
                       return (
                         <div className={styles.geneCardSub} title={expressionTooltip(info)}>
                           Expression: <strong>{formatTpm(info)}</strong>{" "}
-                          <span className={styles.exprPill} style={{ color: cat.color, background: cat.bg }}>
-                            {cat.label}
-                          </span>
+                          {/* "< 1 TPM" flag only when the gene is off (AZ request) */}
+                          {isOff(info) && (
+                            <span className={styles.exprPill} style={{ color: OFF_FLAG.color, background: OFF_FLAG.bg }}>
+                              {OFF_FLAG.label}
+                            </span>
+                          )}
                           {info.sources_disagree && (
                             <span style={{ color: "#856404" }}> ⚠ DepMap and HPA disagree</span>
                           )}
