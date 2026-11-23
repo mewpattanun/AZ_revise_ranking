@@ -128,3 +128,18 @@ def test_known_cell_lines_get_the_expected_category(gene, ach_id, expected):
     ensg = data_service.resolve_gene(gene)["ensembl_id"]
     cats = data_service.classify_expression(data_service.get_rna_consensus(ensg))
     assert cats.loc[ach_id, "category"] == expected
+
+
+def test_protein_100_percent_has_no_rna_only_lines(client):
+    # EGFR high with protein 100%: RNA-only lines (e.g. HSC1, A431) used to rank
+    # on RNA alone; now only lines with protein data are scored.
+    body = _rank(client, genes=[{"hugo": "EGFR"}], w_rna=0.0, w_protein=1.0, top_n=50)
+    assert body["results"]
+    assert all(r["scenario"] == "RNA+Protein" for r in body["results"])
+    names = {r["cell_line_name"] for r in body["results"]}
+    assert "HSC1" not in names and "A431" not in names
+
+
+def test_both_weights_zero_returns_422(client):
+    res = client.post("/api/rank", json={"genes": [{"hugo": "EGFR"}], "w_rna": 0, "w_protein": 0})
+    assert res.status_code == 422
