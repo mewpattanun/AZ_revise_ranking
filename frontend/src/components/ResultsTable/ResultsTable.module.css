@@ -308,6 +308,12 @@
   border-radius: 8px;
 }
 
+/* DepMap and HPA disagree on off vs expressed (explained in the row tooltip) */
+.exprWarn {
+  font-size: 12px;
+  color: #856404;
+}
+
 /* Scenario tag */
 .scenTag {
   display: inline-block;
