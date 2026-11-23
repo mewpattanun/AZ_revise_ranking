@@ -2,7 +2,7 @@
 Pydantic models for request/response validation.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Request models ────────────────────────────────────────────
@@ -69,6 +69,12 @@ class RankRequest(BaseModel):
         description="Planned assay type for compatibility warnings: adherent_screen, 3d_spheroid, suspension_screen, flexible"
     )
 
+    @model_validator(mode="after")
+    def _some_weight(self):
+        if self.w_rna + self.w_protein <= 0:
+            raise ValueError("w_rna and w_protein cannot both be 0")
+        return self
+
 
 class CompareRequest(BaseModel):
     ach_ids: list[str] = Field(..., min_length=2, description="Cell line IDs to compare")
@@ -93,7 +99,8 @@ class RankedCellLine(BaseModel):
     primary_disease: str | None = None
     lineage: str | None = None
     score: float
-    confidence: float
+    # Share of the RNA/protein weight this cell line has data for (1.0 = both).
+    # Replaces the old "confidence" field, which held the same number.
     modality_coverage: float
     scenario: str
     growth_pattern: str | None = None
