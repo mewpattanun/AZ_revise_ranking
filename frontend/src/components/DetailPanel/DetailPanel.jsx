@@ -4,7 +4,7 @@ import styles from "./DetailPanel.module.css";
 import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
 import { methodLabel as rnaMethodLabel } from "../../compareMethods";
 
-export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", rnaMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose }) {
+export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", rnaMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose, sensitivity = null }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [similar, setSimilar] = useState(null);
@@ -227,6 +227,14 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
               </div>
 
             </div>
+              {/* P7: rank sensitivity chart — shown only when this cell is
+                  flagged as weight-sensitive in the sensitivity sweep. */}
+              {sensitivity?.sensitive_candidates?.find((c) => c.ach_id === achId) && (
+                <RankSensitivityChart
+                  achId={achId}
+                  sensitivity={sensitivity}
+                />
+              )}
 
             {/* ── Source-Level Scores per gene ── */}
             {genes.map((g) => {
@@ -640,6 +648,170 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ── P7: Rank sensitivity chart ──────────────────────────────
+   Shows the cell line's rank across all 5 RNA:Protein weight
+   settings, so a scientist can see whether the ranking is stable
+   or depends heavily on the weight choice. Rendered only when
+   the cell appears in sensitivity.sensitive_candidates. */
+
+const RANK_CHART_SETTINGS = [
+  { key: "rna_only", label: "RNA only" },
+  { key: "90_10",    label: "90:10" },
+  { key: "70_30",    label: "70:30" },
+  { key: "50_50",    label: "50:50" },
+  { key: "30_70",    label: "30:70" },
+];
+
+
+function RankSensitivityChart({ achId, sensitivity }) {
+  // Find this cell in the sensitivity candidates
+  const candidate = sensitivity?.sensitive_candidates?.find(
+    (c) => c.ach_id === achId
+  );
+  if (!candidate) return null;
+
+  // Build data points from the candidate's rank per setting
+  const ranks = RANK_CHART_SETTINGS.map((s) => ({
+    ...s,
+    rank: candidate.ranks_per_setting?.[s.key] ?? null,
+  })).filter((p) => p.rank != null);
+
+  if (ranks.length < 2) return null;
+
+  // ── SVG canvas dimensions ──
+  const W = 420;
+  const H = 150;
+  const PAD_L = 40;   // left padding (for y-axis labels)
+  const PAD_R = 20;
+  const PAD_T = 20;
+  const PAD_B = 32;   // bottom padding (for x-axis labels)
+
+  // ── Y-axis scale: rank ascending top-to-bottom ──
+  // Lower rank = top of chart. Add ±2 padding so points aren't on edges.
+  const maxRank = Math.max(...ranks.map((r) => r.rank));
+  const minRank = Math.min(...ranks.map((r) => r.rank));
+  const yMin = Math.max(1, minRank - 2);   // floor at rank 1
+  const yMax = maxRank + 2;
+
+  const xStep = (W - PAD_L - PAD_R) / (ranks.length - 1);
+  const yScale = (r) =>
+    PAD_T + ((r - yMin) / (yMax - yMin)) * (H - PAD_T - PAD_B);
+
+  // Pre-compute all point coordinates
+  const points = ranks.map((r, i) => ({
+    x: PAD_L + i * xStep,
+    y: yScale(r.rank),
+    rank: r.rank,
+    label: r.label,
+    isDefault: r.key === sensitivity?.default_setting,
+  }));
+
+  // SVG path connecting the points
+  const pathD = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
+    .join(" ");
+
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 14,
+        background: "#fafafa",
+        border: "1px solid #e8e4dd",
+        borderRadius: 8,
+      }}
+    >
+      {/* Section title */}
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          color: "#666",
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+          marginBottom: 4,
+        }}
+      >
+        Rank across RNA : Protein weights
+      </div>
+
+      {/* Warning text */}
+      <div style={{ fontSize: 11, color: "#c87a00", marginBottom: 8 }}>
+        ⚠ Weight-sensitive — rank changes by up to ±
+        {candidate.max_rank_change} positions
+      </div>
+
+      {/* SVG chart */}
+      <svg width={W} height={H} style={{ display: "block" }}>
+        {/* Y-axis gridlines (top = yMin, bottom = yMax) */}
+        <line
+          x1={PAD_L} y1={PAD_T}
+          x2={W - PAD_R} y2={PAD_T}
+          stroke="#eee" strokeWidth="1"
+        />
+        <line
+          x1={PAD_L} y1={H - PAD_B}
+          x2={W - PAD_R} y2={H - PAD_B}
+          stroke="#eee" strokeWidth="1"
+        />
+
+        {/* Y-axis labels */}
+        <text x={PAD_L - 6} y={PAD_T + 3} textAnchor="end"
+              fontSize="10" fill="#888">
+          #{yMin}
+        </text>
+        <text x={PAD_L - 6} y={H - PAD_B + 3} textAnchor="end"
+              fontSize="10" fill="#888">
+          #{yMax}
+        </text>
+
+        {/* The line connecting ranks */}
+        <path d={pathD} fill="none" stroke="#1a2a3a" strokeWidth="2" />
+
+        {/* Points (dots + rank label above + setting label below) */}
+        {points.map((p, i) => (
+          <g key={i}>
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r={p.isDefault ? 6 : 4}
+              fill={p.isDefault ? "#f0b429" : "#1a2a3a"}
+              stroke="#fff"
+              strokeWidth="2"
+            />
+            <text
+              x={p.x}
+              y={p.y - 10}
+              textAnchor="middle"
+              fontSize="10"
+              fontWeight="700"
+              fill={p.isDefault ? "#c87a00" : "#1a2a3a"}
+            >
+              #{p.rank}
+            </text>
+            <text
+              x={p.x}
+              y={H - 10}
+              textAnchor="middle"
+              fontSize="10"
+              fill="#666"
+            >
+              {p.label}
+            </text>
+          </g>
+        ))}
+      </svg>
+
+      {/* Legend */}
+      <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>
+        <span style={{ color: "#f0b429", fontWeight: 700 }}>●</span>{" "}
+        default (70:30)
       </div>
     </div>
   );

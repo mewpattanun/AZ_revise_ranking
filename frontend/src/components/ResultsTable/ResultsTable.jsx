@@ -1,4 +1,5 @@
 import styles from "./ResultsTable.module.css";
+import React from "react";
 import { categoryInfo, formatTpm, expressionTooltip } from "../../expression";
 
 // Raw TPM + expression category for each searched gene (AZ priority 5)
@@ -36,7 +37,19 @@ export default function ResultsTable({
   fusionMode = "ignore",
   assayType = null,
   boostMode = false,
+  sensitivity = null,         
+  sensitivityLoading = false, 
 }) {
+  const sensitiveMap = React.useMemo(() => {
+    if (!sensitivity?.sensitive_candidates) return {};
+    return Object.fromEntries(
+      sensitivity.sensitive_candidates.map((c) => [
+        c.ach_id,
+        { isSensitive: true, maxChange: c.max_rank_change },
+      ])
+    );
+  }, [sensitivity]);
+  
   if (loading) {
     return (
       <div className={styles.loading}>
@@ -207,6 +220,7 @@ export default function ResultsTable({
               {showMatchColumn && <th>Match</th>}
               <th>Scenario</th>
               <th>Coverage</th>
+              <th>Stability</th>
               {showMutationColumn && <th>Mutation</th>}
               {showFusionColumn && <th>Fusion</th>}
               {showAssayColumn && <th>Assay</th>}
@@ -287,6 +301,27 @@ export default function ResultsTable({
                     {r.modality_coverage != null
                       ? r.modality_coverage.toFixed(2)
                       : "—"}
+                  </td>
+                  <td style={{ fontSize: "12px" }}>
+                    {sensitivityLoading ? (
+                      <span style={{ color: "#bbb" }}>…</span>
+                    ) : sensitiveMap[r.ach_id] ? (
+                      <span
+                        style={{ color: "#f0b429", fontWeight: 600 }}
+                        title={`Rank changes by up to ${sensitiveMap[r.ach_id].maxChange} positions across RNA:Protein weight settings`}
+                      >
+                        ⚠ ±{sensitiveMap[r.ach_id].maxChange}
+                      </span>
+                    ) : sensitivity ? (
+                      <span
+                        style={{ color: "#2f9e6f" }}
+                        title="Rank is stable across weight settings"
+                      >
+                        ✓
+                      </span>
+                    ) : (
+                      <span style={{ color: "#bbb" }}>—</span>
+                    )}
                   </td>
                   {showMutationColumn && (
                     <td style={{ fontSize: "12px", color: "#555" }}>
