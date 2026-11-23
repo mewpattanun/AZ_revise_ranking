@@ -265,3 +265,60 @@ def test_no_note_outside_multi_gene_off_mode(low_data, genes, mode):
     notes = []
     run_ranking(genes, top_n=4, low_expression_mode=mode, notes_out=notes)
     assert notes == []
+
+
+# ── Several genes: the LOW gene's category comes first too ───
+
+# G2 (HIGH) is strongest exactly where G1 (LOW) is expressed, so without tiers
+# the geometric mean can keep a line that expresses the LOW gene near the top.
+G2_FAVOURS_EXPRESSING = {"A": 20.0, "B": 20.0, "C": 20.0, "D": 20.0,
+                         "E": 900.0, "F": 900.0, "G": 1000.0, "H": 1000.0}
+G3 = {"hugo": "G3", "ensembl_id": "ENSG_G3", "direction": "low", "weight": 1.0}
+
+
+def _set_g2(low_data, values):
+    low_data["by_gene"]["ENSG_G2"] = {"fact_expression_depmap": dict(values), "fact_expression_hpa": dict(values)}
+
+
+def test_multi_gene_off_lines_come_before_lines_that_express_the_low_gene(low_data):
+    # "ERBB2 high + ESR1 low": however strong the HIGH gene is, a line that
+    # expresses the LOW gene (>= 1 TPM) comes after every line where it is off.
+    _set_g2(low_data, G2_FAVOURS_EXPRESSING)
+    order = _order(run_ranking([HIGH_G2, LOW], top_n=10))
+    assert set(order[:4]) == {"A", "B", "C", "D"}          # off for G1
+    assert set(order[4:6]) == {"E", "F"}                   # 1-3 TPM
+    assert set(order[6:]) == {"G", "H"}                    # > 3 TPM
+
+
+def test_multi_gene_score_mode_keeps_the_old_mild_penalty(low_data):
+    # Legacy mode has no tiers: the strong HIGH gene can outweigh the LOW gene.
+    _set_g2(low_data, G2_FAVOURS_EXPRESSING)
+    order = _order(run_ranking([HIGH_G2, LOW], top_n=10, low_expression_mode="score"))
+    assert set(order[:4]) != {"A", "B", "C", "D"}
+
+
+def test_multi_gene_measurable_mode_puts_1_to_3_tpm_first(low_data):
+    _set_g2(low_data, G2_FAVOURS_EXPRESSING)
+    order = _order(run_ranking([HIGH_G2, LOW], top_n=10, low_expression_mode="measurable"))
+    assert set(order[:2]) == {"E", "F"}
+    assert set(order[-4:]) == {"A", "B", "C", "D"}
+
+
+def test_two_low_genes_use_the_worst_tier(low_data):
+    # G1 and G3 both LOW. A is off for G1 but expressed (moderate) for G3, so it
+    # must come after lines that are off for both, even with the best G2 score.
+    _set_g2(low_data, {**{k: 20.0 for k in DEPMAP}, "A": 1000.0})
+    g3 = {k: 0.0 for k in DEPMAP}
+    g3["A"] = 50.0
+    low_data["by_gene"]["ENSG_G3"] = {"fact_expression_depmap": g3, "fact_expression_hpa": g3}
+    order = _order(run_ranking([HIGH_G2, LOW, G3], top_n=10))
+    assert set(order[:3]) == {"B", "C", "D"}                # off for G1 and G3
+    assert order.index("A") > order.index("D")
+
+
+def test_high_only_multi_gene_search_has_no_tiers(low_data):
+    # No LOW gene: the order is the plain geometric mean, as before.
+    _set_g2(low_data, G2_FAVOURS_EXPRESSING)
+    high_g1 = {**LOW, "direction": "high"}
+    order = _order(run_ranking([HIGH_G2, high_g1], top_n=10))
+    assert order[:2] == ["G", "H"]

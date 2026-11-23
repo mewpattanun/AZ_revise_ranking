@@ -718,23 +718,36 @@ def run_ranking(
         combined_per_gene[gene["hugo"]] = combined
 
     # 5. Multi-gene combination
-    # Sort tier per cell line: for a single LOW gene the expression category
-    # comes first ("classify first, then rank"); otherwise every tier is 0.
+    # Sort tier per cell line ("classify first, then rank"): for every LOW gene
+    # the expression category decides the order before the score, in single-
+    # AND multi-gene searches. With several genes a cell line gets its WORST
+    # tier over the LOW genes, so with "TPM below 1" every line where all LOW
+    # genes are off comes before any line that expresses one of them; the
+    # geometric mean only orders lines inside a tier. Without this, a line that
+    # expresses the LOW gene was only mildly penalised (e.g. ERBB2 high + ESR1
+    # low: HCC1954, ESR1 3 TPM, stayed at #17) because since the expressed-
+    # reference z-score, 3 TPM is "average" among ESR1-expressing lines.
+    # HIGH-only searches and mode "score" (legacy): every tier is 0.
     single_low = len(genes) == 1 and genes[0]["direction"] == "low"
+    low_genes = [g["hugo"] for g in genes if g["direction"] == "low"]
+    use_tiers = bool(low_genes) and low_expression_mode in _LOW_TIERS
     # Per-gene desirability and weights of the geometric mean (multi-gene only),
     # kept for the "LOW gene had nothing to remove" note.
     desirability: dict[str, pd.Series] = {}
     gm_weights: dict[str, float] = {}
 
-    def tier_of(ach: str) -> int:
-        if not single_low:
-            return 0
-        cats = categories_per_gene[genes[0]["hugo"]]
+    def gene_tier(hugo: str, ach: str) -> int:
+        cats = categories_per_gene[hugo]
         if ach not in cats.index:
             return low_expression_tier(None, low_expression_mode)
         return low_expression_tier(
             cats.at[ach, "category"], low_expression_mode, bool(cats.at[ach, "sources_disagree"])
         )
+
+    def tier_of(ach: str) -> int:
+        if not use_tiers:
+            return 0
+        return max(gene_tier(hugo, ach) for hugo in low_genes)
 
     if len(genes) == 1:
         gene = genes[0]
@@ -792,7 +805,10 @@ def run_ranking(
         final_df = pd.DataFrame(
             rows, columns=["ach_id", "final_score", "modality_coverage", "scenario", "genes_skipped"]
         )
-        final_df = _sort_by_score(final_df, "final_score", ascending=False)
+        final_df["tier"] = [tier_of(a) for a in final_df["ach_id"]]
+        final_df = final_df.sort_values(
+            ["tier", "final_score", "ach_id"], ascending=[True, False, True], kind="mergesort"
+        ).reset_index(drop=True)
         final_df["final_rank"] = range(1, len(final_df) + 1)
 
     if final_df.empty:
