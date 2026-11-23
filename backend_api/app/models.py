@@ -124,6 +124,8 @@ class RankResponse(BaseModel):
     total_results: int
     results: list[RankedCellLine]
     warnings: list[str] = []
+    # Plain-language notes about the result (shown above the results table)
+    notes: list[str] = []
 
 
 class SourceScore(BaseModel):

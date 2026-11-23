@@ -35,6 +35,7 @@ def rank_cell_lines(req: RankRequest):
     scoring_sources = [s for s in req.sources if s in ranking_service.SCORING_SOURCE_NAMES] \
         or ranking_service.SCORING_SOURCE_NAMES
 
+    notes: list[str] = []
     results = ranking_service.run_ranking(
         genes=resolved_genes,
         w_rna=req.w_rna,
@@ -63,6 +64,7 @@ def rank_cell_lines(req: RankRequest):
         multi_gene_method=req.multi_gene_method,
         low_expression_mode=req.low_expression_mode,
         rna_method=req.rna_method,
+        notes_out=notes,
     )
 
     return RankResponse(
@@ -104,4 +106,5 @@ def rank_cell_lines(req: RankRequest):
         total_results=len(results),
         results=results,
         warnings=warnings,
+        notes=notes,
     )
