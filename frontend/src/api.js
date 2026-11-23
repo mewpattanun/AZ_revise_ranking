@@ -34,6 +34,14 @@ export function rankCellLines(params) {
   });
 }
 
+export function getSensitivity(params) {
+  return request(`${BASE}/sensitivity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
 /* ── Cell line detail ──────────────────────────────────────── */
 
 export function getCellLineDetail(achId, gene) {

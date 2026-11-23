@@ -8,7 +8,7 @@ import ChatWidget from "./components/ChatWidget/ChatWidget.jsx";
 import DocsModal from "./components/DocsModal/DocsModal.jsx";
 import MethodCompare from "./components/MethodCompare/MethodCompare.jsx";
 import { RNA_METHODS, methodLabel as rnaMethodLabel } from "./compareMethods";
-import { rankCellLines } from "./api";
+import { rankCellLines, getSensitivity } from "./api";
 import { exportResultsCsv } from "./exportCsv";
 import { VERSION_LABEL, GIT_COMMIT, BUILD_DATE } from "./version";
 import styles from "./App.module.css";
@@ -49,6 +49,8 @@ export default function App() {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [sensitivity, setSensitivity] = useState(null);
+  const [sensitivityLoading, setSensitivityLoading] = useState(false);
   // Snapshot of filters at the time of the last successful search — used to
   // detect when the current filters differ, so we can prompt the user to
   // refresh the results.
@@ -126,13 +128,23 @@ export default function App() {
     setNotes([]);
     setSelected([]);
 
+    const apiParams = buildApiParams();
     try {
-      const res = await rankCellLines(buildApiParams());
+      const res = await rankCellLines(apiParams);
       setResults(res.results);
       setScoringVersion(res.query?.scoring_version ?? null);
       setNotes(res.notes ?? []);
       setLastSearchedFilters(filters);
       setLastSearchedGenes(genes);
+
+      // P7: fetch weight sensitivity in the background — doesn't block
+      // the main results. Shows which top candidates are weight-sensitive.
+      setSensitivity(null);
+      setSensitivityLoading(true);
+      getSensitivity(apiParams)
+        .then((s) => setSensitivity(s))
+        .catch(() => setSensitivity(null))   // sensitivity is optional UX
+        .finally(() => setSensitivityLoading(false));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -387,8 +399,10 @@ export default function App() {
           )}
 
           <ResultsTable
-            results={displayedResults}
+            results={results} 
             loading={loading}
+            sensitivity={sensitivity}
+            sensitivityLoading={sensitivityLoading}
             selected={selected}
             onToggleSelect={handleToggleSelect}
             onSelectAll={handleSelectAll}
