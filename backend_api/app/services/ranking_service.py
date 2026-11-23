@@ -254,6 +254,47 @@ def apply_low_expression_mode(expr: pd.Series, categories: pd.DataFrame, mode: s
         out[off] = float(expr.max()) + 1e-6 * span
     return out
 
+def apply_low_expression_to_protein(
+    prot_rrf: pd.Series,
+    categories: pd.DataFrame,
+    mode: str,
+) -> pd.Series:
+    """
+    P6 LOW-mode fix: extend P5's off-tier treatment to protein.
+
+    apply_low_expression_mode (P5) pushes RNA of off cells to the extreme
+    so noise below 1 TPM does not order them. Protein was left untouched,
+    which created a bug in mixed-coverage off tiers: cells without protein
+    kept combined_score = 0 while cells with low protein scored > 0, so
+    RNA-only cells unfairly ranked above cells with measured protein.
+
+    This helper mirrors the push for protein, but only when coverage is
+    MIXED (some off cells have protein, some don't). When every off cell
+    has protein (Prab's P5 Case A), protein is left alone so it can still
+    order the off group — keeping test_protein_still_orders_lines_inside_
+    the_off_group valid.
+    """
+    if mode not in _LOW_TIERS or prot_rrf.empty or categories.empty:
+        return prot_rrf
+    is_off = categories["category"].isin(data_service.OFF_CATEGORIES)
+    off = categories.index[is_off]
+    if len(off) == 0:
+        return prot_rrf
+
+    # Case A (preserve P5): every off cell has protein → leave alone
+    off_in_prot = off.intersection(prot_rrf.index)
+    if len(off_in_prot) == len(off):
+        return prot_rrf
+
+    # Case B (P6 fix): mixed coverage → tie off cells on protein too,
+    # mirroring the RNA push direction so sort order stays consistent.
+    span = float(prot_rrf.max() - prot_rrf.min()) or 1.0
+    out = prot_rrf.astype(float).copy()
+    if mode == "off":
+        out[off_in_prot] = float(prot_rrf.min()) - 1e-6 * span
+    else:
+        out[off_in_prot] = float(prot_rrf.max()) + 1e-6 * span
+    return out
 
 def _expression_info(categories: pd.DataFrame, ach_id: str, consensus: pd.Series | None = None) -> dict:
     """Category and raw TPM of one cell line for one gene (shown in the results).
@@ -335,7 +376,7 @@ def combine_rna_protein(
     Combine expression and protein scores.
     invert=True flips both to "low is good" (1 - score), used for LOW genes in
     multi-gene searches so that a higher score is always better.
-    Returns DataFrame with: ach_id, combined_score, scenario, coverage_confidence.
+    Returns DataFrame with: ach_id, combined_score, scenario, modality_coverage.
     """
     expr_norm = _norm01(expr_rrf)
     prot_norm = _norm01(prot_rrf)
@@ -354,15 +395,15 @@ def combine_rna_protein(
         if has_rna and has_prot:
             score = w_rna * expr_norm[ach] + w_prot * prot_norm[ach]
             scenario = "RNA+Protein"
-            confidence = 1.0
+            modality_coverage = 1.0
         elif has_rna:
-            score = w_rna * float(expr_norm[ach])
+            score = float(expr_norm[ach])
             scenario = "RNA only"
-            confidence = w_rna
+            modality_coverage = w_rna
         elif has_prot:
-            score = w_prot * float(prot_norm[ach])
+            score = float(prot_norm[ach])
             scenario = "Protein only"
-            confidence = w_prot
+            modality_coverage = w_prot
         else:
             continue
 
@@ -370,12 +411,12 @@ def combine_rna_protein(
             "ach_id": ach,
             "combined_score": score,
             "scenario": scenario,
-            "coverage_confidence": confidence,
+            "modality_coverage": modality_coverage,
         })
 
     # Explicit columns: a gene with no usable data must give an empty table
     # (the caller returns no results), not a column-less frame that crashes.
-    return pd.DataFrame(rows, columns=["ach_id", "combined_score", "scenario", "coverage_confidence"])
+    return pd.DataFrame(rows, columns=["ach_id", "combined_score", "scenario", "modality_coverage"])
 
 
 # ── Multi-gene fusion ────────────────────────────────────────
@@ -519,6 +560,7 @@ def run_ranking(
     target_subtype: str | None = None,
     q6_boost_enabled: bool = True,
     core_only: bool = False,
+    require_protein: bool = False,
     top_n: int = 20,
     scoring_method: str = "robust_z",
     sources: list[str] | None = None,
@@ -573,6 +615,10 @@ def run_ranking(
 
         # 2. Protein (always scored, independent of the RNA source filter)
         prot_rrf = rank_protein(ensg, scoring_method)
+        # P6 LOW-mode fix: in mixed-coverage off tier, tie protein too so
+        # RNA-only cells do not get a spurious advantage from missing protein.
+        if gene["direction"] == "low":
+            prot_rrf = apply_low_expression_to_protein(prot_rrf, categories, low_expression_mode)
         flags = _gene_flags(signal, prot_rrf)
         for ach, texts in _disagree_flags(categories).items():
             flags.setdefault(ach, []).extend(texts)
@@ -648,13 +694,13 @@ def run_ranking(
                 gdf = combined_per_gene[gene["hugo"]]
                 match = gdf[gdf["ach_id"] == ach]
                 if len(match) > 0:
-                    confidences.append(match["coverage_confidence"].iloc[0])
+                    confidences.append(match["modality_coverage"].iloc[0])
                     scenarios.append(match["scenario"].iloc[0])
 
             rows.append({
                 "ach_id": ach,
                 "final_score": float(multi_rrf[ach]),
-                "coverage_confidence": float(np.mean(confidences)) if confidences else 0.0,
+                "modality_coverage": float(np.mean(confidences)) if confidences else 0.0,
                 "scenario": " | ".join(scenarios),
                 # genes this cell line has no score for (skipped in the geometric mean)
                 "genes_skipped": [
@@ -663,7 +709,7 @@ def run_ranking(
             })
 
         final_df = pd.DataFrame(
-            rows, columns=["ach_id", "final_score", "coverage_confidence", "scenario", "genes_skipped"]
+            rows, columns=["ach_id", "final_score", "modality_coverage", "scenario", "genes_skipped"]
         )
         final_df = _sort_by_score(final_df, "final_score", ascending=False)
         final_df["final_rank"] = range(1, len(final_df) + 1)
@@ -703,7 +749,9 @@ def run_ranking(
 
         if core_only and not is_core:
             continue
-
+        
+        if require_protein and "Protein" not in str(row.get("scenario", "")):
+            continue
         # Collect mutations for include mode
         mutations = None
         if mutation_mode == "include":
@@ -740,7 +788,8 @@ def run_ranking(
             "lineage": cl.get("lineage"),
             "growth_pattern": cl.get("growth_pattern"),
             "score": round(float(row[score_col]), 4),
-            "confidence": round(float(row["coverage_confidence"]), 2),
+            "confidence": round(float(row["modality_coverage"]), 2),
+            "modality_coverage": round(float(row["modality_coverage"]), 2),
             "scenario": row.get("scenario", ""),
             "is_core": is_core,
             "mutations": mutations,

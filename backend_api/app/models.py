@@ -33,6 +33,7 @@ class RankRequest(BaseModel):
     target_subtype: str | None = Field(None, description="Preferred subtype for Q6 boost")
     q6_boost_enabled: bool = Field(True, description="Enable Q6 soft boost (default on)")
     core_only: bool = Field(False, description="Only cell lines with data in all expression sources")
+    require_protein: bool = Field(False, description="P6: only cell lines with protein data (exclude RNA-only)")
     top_n: int = Field(20, ge=1, le=200, description="Number of results to return")
     scoring_method: str = Field(
         "robust_z",
@@ -93,6 +94,7 @@ class RankedCellLine(BaseModel):
     lineage: str | None = None
     score: float
     confidence: float
+    modality_coverage: float
     scenario: str
     growth_pattern: str | None = None
     is_core: bool = False
@@ -141,6 +143,7 @@ class CellLineDetail(BaseModel):
     fusions: list[dict]
     score: float | None = None
     confidence: float | None = None
+    modality_coverage: float | None = None
     scenario: str | None = None
 
 

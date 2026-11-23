@@ -1,0 +1,36 @@
+7c7
+< | ERBB2 high | 9/10 | 0.584 | HCC1569 #19→#44; HCC38 #40→#20; ZR7530 #15→#34 |
+---
+> | ERBB2 high | 5/10 | 0.655 | COLO678 #14→#39; SNU119 #17→#42; MDAMB453 #13→#34 |
+9,12c9,12
+< | EGFR high | 8/10 | 0.411 | YSCCC #17→#64; A431 #19→#61; UMUC5 #16→#57 |
+< | VIM low | 2/10 | -0.163 | EVSAT #574→#1; SUM185PE #513→#11; NCIH1770 #390→#9 |
+< | MUC1 high | 7/10 | 0.286 | CAPAN2 #10→#80; CCC5 #7→#75; YSCCC #9→#77 |
+< | ERBB2 + ESR1 high | 5/10 | 0.530 | COLO205 #15→#650; KYSE30 #62→#18; T47D #17→#5 |
+---
+> | EGFR high | 4/10 | 0.653 | OSRC2 #20→#46; CAL27 #8→#29; HSC4 #11→#31 |
+> | VIM low | 2/10 | -0.160 | EVSAT #574→#1; SUM185PE #513→#11; NCIH1770 #390→#9 |
+> | MUC1 high | 3/10 | 0.295 | NCIH2228 #16→#75; NCIH2126 #15→#57; DU145 #13→#52 |
+> | ERBB2 + ESR1 high | 8/10 | 0.541 | COLO205 #15→#89; NCIH1781 #37→#19; SKOV3 #16→#4 |
+18c18
+< | ERBB2 high | HER2-amplified | 2/4 | 2/4 | SKBR3 #30/1581→#50/1546, BT474 #32/1581→#58/1546, HCC1954 #2/1581→#4/1546, NCIN87 #1/1581→#1/1546 |
+---
+> | ERBB2 high | HER2-amplified | 2/4 | 2/4 | SKBR3 #30/1581→#16/1546, BT474 #32/1581→#20/1546, HCC1954 #2/1581→#9/1546, NCIN87 #1/1581→#2/1546 |
+20,22c20,22
+< | EGFR high | EGFR-amplified | 2/3 | 2/3 | A431 #19/1581→#61/1546, HCC827 #2/1581→#2/1546, MDAMB468 #5/1581→#3/1546 |
+< | VIM low | luminal epithelial, vimentin-negative | 0/3 | 0/3 | MCF7 #622/1581→#148/1546, T47D #627/1581→#328/1546, ZR751 #652/1581→#489/1546 |
+< | ERBB2 + ESR1 high | ER-positive and HER2-amplified | 1/1 | 0/1 | BT474 #9/1581→#14/1546 |
+---
+> | EGFR high | EGFR-amplified | 2/3 | 3/3 | A431 #19/1581→#5/1546, HCC827 #2/1581→#8/1546, MDAMB468 #5/1581→#9/1546 |
+> | VIM low | luminal epithelial, vimentin-negative | 0/3 | 0/3 | MCF7 #622/1581→#148/1546, T47D #627/1581→#266/1546, ZR751 #652/1581→#424/1546 |
+> | ERBB2 + ESR1 high | ER-positive and HER2-amplified | 1/1 | 1/1 | BT474 #9/1581→#6/1546 |
+30c30
+< | EGFR high | 100% | 13% | 8/10 | 100% |
+---
+> | EGFR high | 100% | 13% | 3/10 | 100% |
+32,33c32,33
+< | MUC1 high | 100% | 25% | 6/10 | 100% |
+< | ERBB2 + ESR1 high | 60% | 5% | 10/10 | 88% |
+---
+> | MUC1 high | 100% | 25% | 5/10 | 100% |
+> | ERBB2 + ESR1 high | 88% | 5% | 8/10 | 88% |
