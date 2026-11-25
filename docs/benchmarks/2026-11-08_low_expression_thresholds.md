@@ -114,9 +114,46 @@ The fix: multi-gene searches now use the same "classify first" tiers as single-g
 
 1,370 lines are off for ESR1 and 1,424 for TAL2, so expressing lines now come straight after the off group. ERBB2 HIGH + CD3E LOW is unchanged, because no top ERBB2 line expresses CD3E. Mode `score` keeps the old, milder behaviour for comparison.
 
+### 2f. Off cutoff methods: gene-relative off (added 2026-11-25)
+
+A fixed 1 TPM cutoff cannot call a gene off when its "off" level is above 1 TPM. Examples: VIM is 2–4 TPM in epithelial MCF7/T47D against ~1,000 TPM in mesenchymal lines, and CDKN2A is 1.45 TPM in MCF7 (deleted). The API option `off_method` (sidebar: **Off cutoff**) chooses how "off" is decided. Below 1 TPM is always off. A line at 1 TPM or more that a method calls off gets the category `low_relative` and the flag "Low for GENE". With "TPM below 1", the lines below 1 TPM come first and tie, as before. The `low_relative` lines come next, ordered by their score: their RNA is not tied, because 2 vs 20 TPM is a real difference, not noise, and protein counts where it was measured. With "TPM greater than 1", they come just before the lines below 1 TPM at the end.
+
+| Method | Rule (settings in `config.py`) |
+|---|---|
+| `fixed` (default) | below 1 TPM only |
+| `percent_of_reference` | below 10% of the 90th percentile of lines ≥ 1 TPM |
+| `mixture` | low group of a 2-group Gaussian split of log2(TPM + 1) (groups ≥ 4-fold apart, each ≥ 5% of lines) |
+| `distance_from_on` | more than 3 SD below the high (expressing) group of that split |
+| `strict_mixture` | mixture, only for a clear split (Ashman's D > 2, BIC gain > 10), and ≥ 90% likely in the low group |
+| `custom` | below `off_cutoff_tpm` (≥ 1) |
+
+Known cell lines: 13 known negatives and 16 lines that must not be called off. The 16 include normal, non-amplified ERBB2, to catch over-calling. Results are from the implemented code.
+
+| Method | Negatives caught | Wrongly called off |
+|---|---|---|
+| fixed | 8/13 | 0/16 |
+| percent_of_reference | **12/13** | 2/16 (EGFR in MCF7, T47D) |
+| mixture | 10/13 | 0/16 |
+| distance_from_on | 10/13 | 0/16 |
+| strict_mixture | 10/13 | **0/16** |
+
+Extra lines called off at ≥ 1 TPM (out of ~1,545):
+
+| Gene | percent_of_reference | mixture | distance_from_on | strict_mixture |
+|---|---|---|---|---|
+| VIM | 674 | 479 | 403 | 433 |
+| CDH1 | 271 | 56 | 0 | 20 |
+| CDKN2A | 354 | 12 | 0 | 0 |
+| ERBB2 | 312 | 209 | 0 | 0 |
+| EGFR | 208 | 0 | 0 | 0 |
+| ESR1 | 62 | 0 | 0 | 0 |
+| PTEN | 20 | 0 | 0 | 0 |
+
+`strict_mixture` catches the VIM cases (MCF7, T47D) without calling normal ERBB2 lines off; `mixture` and `percent_of_reference` over-call (ERBB2 +209 / +312). No data-driven method catches HCC1954 (ESR1 3.2 TPM): ESR1-high lines are few and many lines sit between 1 and 10 TPM, so ESR1 has no clear split. A `custom` cutoff (e.g. 10 TPM) handles that case. The default stays `fixed`, as the AZ team asked; the other methods are opt-in.
+
 ## 3. Known limitations
 
-1. **Off only relative to the gene's normal level.** Examples are HCC1954 ESR1 (~3 TPM against ~40 TPM in ER+ lines) and VIM in epithelial lines (2–4 TPM against 2,000+ TPM in mesenchymal lines). A fixed TPM cutoff cannot call these off. A gene-relative rule ("below X% of the level in expressing lines") could be added later as a flag.
+1. **Off only relative to the gene's normal level.** Examples are HCC1954 ESR1 (~3 TPM against ~40 TPM in ER+ lines) and VIM in epithelial lines (2–4 TPM against 2,000+ TPM in mesenchymal lines). A fixed TPM cutoff cannot call these off. The `off_method` option (section 2f) now offers gene-relative rules; `strict_mixture` catches the VIM cases, and ESR1 needs a `custom` cutoff.
 2. **Protein lost but RNA normal.** MDA-MB-468 has no PTEN protein (PTEN is mutated) but 19 TPM of RNA. RNA thresholds cannot catch this; use the mutation filter or protein data.
 3. **Missing protein still counts as zero for low searches.** Inside the off group, RNA-only lines score 0 and come before lines with measured protein. This bias was already there before this change (the old `score` mode does the same) and belongs to AZ priority 6 (separate coverage from the score).
 4. **Same cutoffs for both sources.** These are TPM values from two processing pipelines of the same data. A per-source calibration would need an independent assay.

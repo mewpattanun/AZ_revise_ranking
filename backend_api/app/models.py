@@ -52,6 +52,19 @@ class RankRequest(BaseModel):
         description="What 'low' means for LOW genes: off = 'TPM below 1', below 1 TPM in every source first (default); "
                     "measurable = 'TPM greater than 1', 1-3 TPM first; score = legacy, sort by score only",
     )
+    off_method: str = Field(
+        "fixed",
+        pattern="^(fixed|percent_of_reference|mixture|distance_from_on|strict_mixture|custom)$",
+        description="How a gene is judged 'off' in a cell line. fixed = below 1 TPM (default). The others can "
+                    "also call a line off at 1 TPM or more when it is low for that gene: percent_of_reference "
+                    "(< 10% of the gene's reference level), mixture (low group of a 2-group split), "
+                    "distance_from_on (> 3 SD below the expressing group), strict_mixture (mixture, only genes "
+                    "with a clear on/off split), custom (below off_cutoff_tpm). Below 1 TPM is always off.",
+    )
+    off_cutoff_tpm: float | None = Field(
+        None, ge=1.0, le=100000.0,
+        description="Cutoff in TPM for off_method 'custom' (a line below it counts as off); at least 1",
+    )
     rna_method: str = Field(
         "robust_z",
         pattern="^(robust_z|standard_z|log2_tpm)$",
@@ -73,6 +86,8 @@ class RankRequest(BaseModel):
     def _some_weight(self):
         if self.w_rna + self.w_protein <= 0:
             raise ValueError("w_rna and w_protein cannot both be 0")
+        if self.off_method == "custom" and self.off_cutoff_tpm is None:
+            raise ValueError("off_method 'custom' needs off_cutoff_tpm")
         return self
 
 

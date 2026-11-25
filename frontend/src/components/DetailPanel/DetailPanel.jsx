@@ -1,7 +1,9 @@
 import { Fragment, useState, useEffect } from "react";
 import { getCellLineEvidence, getSimilarCellLines } from "../../api";
 import styles from "./DetailPanel.module.css";
-import { formatTpm, expressionTooltip, isOff, OFF_FLAG } from "../../expression";
+import {
+  formatTpm, expressionTooltip, isOff, OFF_FLAG, isRelativeOff, RELATIVE_OFF_FLAG, relativeOffLabel,
+} from "../../expression";
 import { methodLabel as rnaMethodLabel } from "../../compareMethods";
 
 export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "robust_z", rnaMethod = "robust_z", maxScore = 0, wRna = 0.7, wProtein = 0.3, mutationMode = "ignore", fusionMode = "ignore", onClose, sensitivity = null }) {
@@ -146,8 +148,18 @@ export default function DetailPanel({ achId, genes, resultRow, scoringMethod = "
                               {OFF_FLAG.label}
                             </span>
                           )}
+                          {isRelativeOff(info) && (
+                            <span className={styles.exprPill} style={{ color: RELATIVE_OFF_FLAG.color, background: RELATIVE_OFF_FLAG.bg }}>
+                              {relativeOffLabel(g.hugo)}
+                            </span>
+                          )}
                           {info.sources_disagree && (
                             <span style={{ color: "#856404" }}> ⚠ DepMap and HPA disagree</span>
+                          )}
+                          {isRelativeOff(info) && info.off_reason && (
+                            <div style={{ color: "#9c4221", fontSize: "11px", marginTop: 2 }}>
+                              Off for {g.hugo}: {info.off_reason}
+                            </div>
                           )}
                         </div>
                       );

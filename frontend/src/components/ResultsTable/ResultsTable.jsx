@@ -1,6 +1,9 @@
 import styles from "./ResultsTable.module.css";
 import React from "react";
-import { formatTpm, expressionTooltip, isOff, OFF_FLAG, DISAGREE_HINT } from "../../expression";
+import {
+  formatTpm, expressionTooltip, isOff, OFF_FLAG, DISAGREE_HINT,
+  isRelativeOff, RELATIVE_OFF_FLAG, relativeOffLabel,
+} from "../../expression";
 
 // Raw TPM for each searched gene; the "< 1 TPM" flag only when the gene is off
 // (AZ request), and ⚠ when DepMap and HPA disagree on off vs expressed.
@@ -17,6 +20,12 @@ function ExpressionCell({ expression }) {
           {isOff(info) && (
             <span className={styles.exprPill} style={{ color: OFF_FLAG.color, background: OFF_FLAG.bg }}>
               {OFF_FLAG.label}
+            </span>
+          )}
+          {/* >= 1 TPM but off for this gene (only with a gene-relative off cutoff) */}
+          {isRelativeOff(info) && (
+            <span className={styles.exprPill} style={{ color: RELATIVE_OFF_FLAG.color, background: RELATIVE_OFF_FLAG.bg }}>
+              {relativeOffLabel(hugo)}
             </span>
           )}
           {info.sources_disagree && (

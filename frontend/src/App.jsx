@@ -37,6 +37,10 @@ const DEFAULT_FILTERS = {
   mirna_threshold: null,
   // What "low" means for LOW genes (AZ priority 5): "off" | "measurable"
   low_expression_mode: "off",
+  // How "off" is decided: "fixed" (below 1 TPM) or a gene-relative method;
+  // off_cutoff_tpm is only used by "custom"
+  off_method: "fixed",
+  off_cutoff_tpm: null,
   // How each RNA source is put on a common scale: "robust_z" (default) | "standard_z" | "log2_tpm"
   rna_method: "robust_z",
 };
@@ -112,6 +116,11 @@ export default function App() {
     // frontend-only fields, don't send them
     delete apiParams.filter_mode;
     delete apiParams.driver_only;
+    // "Custom cutoff" with the number cleared: fall back to the fixed 1 TPM rule
+    if (apiParams.off_method === "custom" && !(apiParams.off_cutoff_tpm >= 1)) {
+      apiParams.off_method = "fixed";
+    }
+    if (apiParams.off_method !== "custom") apiParams.off_cutoff_tpm = null;
     return apiParams;
   }
 

@@ -190,6 +190,7 @@ def test_results_show_tpm_and_category(low_data):
         "tpm": 0.03,
         "tpm_by_source": {"depmap": 0.06, "hpa": 0.0},
         "sources_disagree": False,
+        "off_reason": None,          # only set for lines at >= 1 TPM called off by a gene-relative method
     }
     assert by_id["G"]["expression"]["G1"]["category"] == "moderate"
     assert "_tier" not in by_id["G"]

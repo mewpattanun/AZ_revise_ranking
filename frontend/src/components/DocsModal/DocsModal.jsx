@@ -244,6 +244,36 @@ function MethodsContent() {
         The full category is still used for ranking and is included in the CSV export.
       </p>
       <p>
+        <strong>Off cutoff.</strong> A fixed 1 TPM cutoff cannot see that a gene can be
+        off at more than 1 TPM: epithelial MCF7 has VIM 2.5 TPM, while mesenchymal lines
+        have about 1,000. When a LOW gene is searched, the <strong>Off cutoff</strong>{" "}
+        option chooses how "off" is decided. Below 1 TPM is always off; the other methods
+        can also call a line off at 1 TPM or more, shown as <strong>Low for GENE</strong>{" "}
+        (hover or open the detail panel for the reason). With "TPM below 1", lines below
+        1 TPM come first (tied), then the Low for GENE lines ordered by their score
+        (lowest RNA first; protein counts where it was measured):
+      </p>
+      <ul>
+        <li><strong>Fixed 1 TPM</strong> (default): below 1 TPM only.</li>
+        <li><strong>Strict mixture</strong>: for genes whose cell lines split clearly into
+          an off and an on group (two Gaussian groups of log2(TPM + 1), separation
+          Ashman's D &gt; 2), lines that are at least 90% likely to be in the low group.
+          Other genes keep 1 TPM.</li>
+        <li><strong>Distance from on-group</strong>: more than 3 SD below the group of
+          lines that express the gene.</li>
+        <li><strong>Mixture model</strong> (experimental): the low group of any clear
+          enough 2-group split; can call normal lines off (e.g. ERBB2).</li>
+        <li><strong>% of reference</strong> (experimental): below 10% of the gene's
+          reference level (90th percentile of lines at 1 TPM or more); calls many lines off.</li>
+        <li><strong>Custom cutoff</strong>: below a TPM you choose (at least 1), for example
+          10 TPM for ESR1.</li>
+      </ul>
+      <p>
+        On 29 cell lines with known biology, Fixed 1 TPM caught 8 of 13 known negatives,
+        Strict mixture 10 of 13 with no false calls, and % of reference 12 of 13 but with 2
+        false calls (see the threshold benchmark in the repository).
+      </p>
+      <p>
         For a LOW gene the category is applied first, then the score: the lowest number is
         not automatically the best low-expression candidate, because values below 1 TPM are
         mostly noise. With <strong>TPM below 1</strong> (default) the off cell lines come

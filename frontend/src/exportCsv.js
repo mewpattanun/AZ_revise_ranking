@@ -7,7 +7,7 @@
  *    (mutations, fusions, assay, tissue match) when relevant filters were active.
  */
 
-import { categoryInfo } from "./expression";
+import { categoryInfo, offMethodLabel } from "./expression";
 
 function escapeCsv(value) {
   if (value == null) return "";
@@ -57,6 +57,10 @@ export function exportResultsCsv({ results, genes, filters }) {
     const mode = filters.low_expression_mode || "off";
     lines.push(
       `# Low expression means: ${mode === "measurable" ? "TPM greater than 1 (lowest from 1 TPM upwards first)" : "TPM below 1 (< 1 TPM in every source first)"}`
+    );
+    const method = filters.off_method || "fixed";
+    lines.push(
+      `# Off cutoff: ${offMethodLabel(method)}${method === "custom" && filters.off_cutoff_tpm ? ` (off below ${filters.off_cutoff_tpm} TPM)` : ""}`
     );
   }
   lines.push(`# Mutation filter: ${filters.mutation_mode}`);
@@ -126,7 +130,11 @@ export function exportResultsCsv({ results, genes, filters }) {
       row.push(
         info?.tpm_by_source?.depmap ?? "",
         info?.tpm_by_source?.hpa ?? "",
-        info ? categoryInfo(info.category).label + (info.sources_disagree ? " (sources disagree)" : "") : ""
+        info
+          ? categoryInfo(info.category).label +
+            (info.category === "low_relative" && info.off_reason ? ` (${info.off_reason})` : "") +
+            (info.sources_disagree ? " (sources disagree)" : "")
+          : ""
       );
     });
 

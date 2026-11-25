@@ -161,3 +161,39 @@ def test_erbb2_high_esr1_low_pushes_esr1_expressing_lines_below_off_lines(client
     cats = [r["expression"]["ESR1"]["category"] for r in body["results"]]
     assert all(c in OFF for c in cats)                      # 1,370 lines are off, so the top 200 all are
     assert "HCC1954" not in {r["cell_line_name"] for r in body["results"]}
+
+
+# ── Off cutoff methods (gene-relative off) ───────────────────
+
+def test_strict_mixture_calls_vim_off_in_epithelial_lines(client):
+    # MCF7 and T47D have VIM ~2-4 TPM vs ~1,000 in mesenchymal lines: off for VIM
+    # under strict_mixture ("Low for VIM"), but not under the default 1 TPM rule.
+    from app.services import data_service
+
+    sig = data_service.get_rna_consensus(data_service.resolve_gene("VIM")["ensembl_id"])
+    strict = data_service.classify_expression(sig, "strict_mixture")
+    fixed = data_service.classify_expression(sig, "fixed")
+    for ach in ("ACH-000019", "ACH-000147"):          # MCF7, T47D
+        assert strict.loc[ach, "category"] == "low_relative"
+        assert "clear on/off split" in strict.loc[ach, "off_reason"]
+        assert fixed.loc[ach, "category"] in ("low_measurable", "moderate")
+    for ach in ("ACH-000768", "ACH-000148"):          # MDA-MB-231, HS578T (mesenchymal)
+        assert strict.loc[ach, "category"] == "moderate"
+    # The API reports the method, and VIM-low results start with the off group
+    body = _rank(client, genes=[{"hugo": "VIM", "direction": "low"}], top_n=100, off_method="strict_mixture")
+    assert body["query"]["low_expression"]["off_method"] == "strict_mixture"
+    assert all(r["expression"]["VIM"]["category"] in data_service.OFF_CATEGORIES for r in body["results"])
+
+
+def test_strict_mixture_does_not_call_normal_erbb2_off(client):
+    # ERBB2 has no clear on/off split (normal ~20 TPM, amplified ~thousands):
+    # strict_mixture must not add any gene-relative off lines.
+    body = _rank(client, genes=[{"hugo": "ERBB2", "direction": "low"}], top_n=200, off_method="strict_mixture")
+    assert not any(r["expression"]["ERBB2"]["category"] == "low_relative" for r in body["results"])
+
+
+def test_custom_cutoff_needs_a_value(client):
+    res = client.post("/api/rank", json={"genes": [{"hugo": "ESR1", "direction": "low"}], "off_method": "custom"})
+    assert res.status_code == 422
+    body = _rank(client, genes=[{"hugo": "ESR1", "direction": "low"}], off_method="custom", off_cutoff_tpm=10, top_n=200)
+    assert all(max(r["expression"]["ESR1"]["tpm_by_source"].values()) < 10 for r in body["results"])

@@ -38,7 +38,10 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from app.config import DEFAULT_LOW_EXPRESSION_MODE, EXPR_OFF_TPM, LOW_EXPRESSION_MODES, RRF_K
+from app.config import (
+    DEFAULT_LOW_EXPRESSION_MODE, DEFAULT_OFF_METHOD, EXPR_OFF_TPM, LOW_EXPRESSION_MODES,
+    OFF_METHOD_LABELS, OFF_METHODS, RRF_K,
+)
 from app.services import data_service
 
 
@@ -203,10 +206,13 @@ def _gene_flags(signal: pd.DataFrame, prot_scores: pd.Series) -> dict[str, list[
 # Order of the categories for a LOW gene, per mode (lower tier = shown first).
 # "missing" = no RNA value (protein only) always comes last.
 _LOW_TIERS = {
-    "off": {"below_detection": 0, "negligible": 0, "low_measurable": 1, "moderate": 2},
-    "measurable": {"low_measurable": 0, "moderate": 2, "below_detection": 3, "negligible": 3},
+    # low_relative = off for this gene under a gene-relative off cutoff method,
+    # but at >= 1 TPM: it comes right after the lines below 1 TPM (and, with
+    # "TPM greater than 1", right before them at the end).
+    "off": {"below_detection": 0, "negligible": 0, "low_relative": 1, "low_measurable": 2, "moderate": 3},
+    "measurable": {"low_measurable": 0, "moderate": 2, "low_relative": 3, "below_detection": 4, "negligible": 4},
 }
-_MISSING_TIER = 4
+_MISSING_TIER = 5
 
 
 def low_expression_tier(category: str | None, mode: str, sources_disagree: bool = False) -> int:
@@ -240,7 +246,9 @@ def apply_low_expression_mode(expr: pd.Series, categories: pd.DataFrame, mode: s
     """
     if mode not in _LOW_TIERS or expr.empty or categories.empty:
         return expr
-    is_off = categories["category"].isin(data_service.OFF_CATEGORIES)
+    # Only lines below 1 TPM tie: a gene-relative off line (low_relative, >= 1 TPM)
+    # keeps its real RNA score, so 2 TPM still ranks before 20 TPM.
+    is_off = categories["category"].isin(data_service.BELOW_1_CATEGORIES)
     off = categories.index[is_off].intersection(expr.index)
     if len(off) == 0:
         return expr
@@ -277,7 +285,8 @@ def apply_low_expression_to_protein(
     """
     if mode not in _LOW_TIERS or prot_rrf.empty or categories.empty:
         return prot_rrf
-    is_off = categories["category"].isin(data_service.OFF_CATEGORIES)
+    # same group as apply_low_expression_mode: lines below 1 TPM only
+    is_off = categories["category"].isin(data_service.BELOW_1_CATEGORIES)
     off = categories.index[is_off]
     if len(off) == 0:
         return prot_rrf
@@ -302,7 +311,8 @@ def _expression_info(categories: pd.DataFrame, ach_id: str, consensus: pd.Series
     """Category and raw TPM of one cell line for one gene (shown in the results).
     rna_value = the RNA consensus of the chosen rna_method (robust z, standard z or log2(TPM + 1))."""
     if ach_id not in categories.index:
-        return {"category": "missing", "tpm": None, "tpm_by_source": {}, "sources_disagree": False, "rna_value": None}
+        return {"category": "missing", "tpm": None, "tpm_by_source": {}, "sources_disagree": False,
+                "rna_value": None, "off_reason": None}
     row = categories.loc[ach_id]
     by_source = {
         c[len("tpm_"):]: round(float(row[c]), 2)
@@ -316,6 +326,8 @@ def _expression_info(categories: pd.DataFrame, ach_id: str, consensus: pd.Series
         "tpm_by_source": by_source,
         "sources_disagree": bool(row["sources_disagree"]),
         "rna_value": round(float(value), 3) if value is not None and pd.notna(value) else None,
+        # why a line at >= 1 TPM counts as off (gene-relative off cutoff method), else None
+        "off_reason": row.get("off_reason") if isinstance(row.get("off_reason"), str) else None,
     }
 
 
@@ -327,13 +339,15 @@ def low_gene_notes(
     desirability: dict[str, pd.Series],
     weights: dict[str, float],
     mode: str,
+    off_method: str = DEFAULT_OFF_METHOD,
 ) -> list[str]:
     """
     Plain-language note for each LOW gene in a multi-gene (geometric mean)
     search that had no visible effect, so "HIGH A + LOW B" looking the same as
     "HIGH A" is not mistaken for a bug. A note is added when:
-      - every cell line shown is off (< 1 TPM) for the LOW gene, and
-      - none of the cell lines that express it (>= 1 TPM) would have been in
+      - every cell line shown is off for the LOW gene (< 1 TPM, or off under
+        the chosen off cutoff method), and
+      - none of the cell lines where it is not off would have been in
         the list without it (same geometric mean, that gene left out, over the
         cell lines that passed the filters; the Q6 boost is not included).
     If the LOW gene did push expressing lines out of the list, there is no note:
@@ -362,12 +376,21 @@ def low_gene_notes(
         expressing = set(cats.index[~cats["category"].isin(off)])
         if would_show & expressing:
             continue
-        notes.append(
-            f"{hugo} (LOW) is below {EXPR_OFF_TPM:g} TPM in all {len(shown)} cell lines shown, "
-            f"so it does not separate them. None of the {len(expressing):,} cell lines that "
-            f"express {hugo} ({EXPR_OFF_TPM:g} TPM or more) would have been in this list "
-            f"without it, so there was nothing for {hugo} (LOW) to remove."
-        )
+        if off_method == "fixed":
+            notes.append(
+                f"{hugo} (LOW) is below {EXPR_OFF_TPM:g} TPM in all {len(shown)} cell lines shown, "
+                f"so it does not separate them. None of the {len(expressing):,} cell lines that "
+                f"express {hugo} ({EXPR_OFF_TPM:g} TPM or more) would have been in this list "
+                f"without it, so there was nothing for {hugo} (LOW) to remove."
+            )
+        else:
+            label = OFF_METHOD_LABELS.get(off_method, off_method)
+            notes.append(
+                f"{hugo} (LOW) is off ({label}) in all {len(shown)} cell lines shown, "
+                f"so it does not separate them. None of the {len(expressing):,} cell lines where "
+                f"{hugo} is not off would have been in this list without it, so there was nothing "
+                f"for {hugo} (LOW) to remove."
+            )
     return notes
 
 
@@ -645,6 +668,8 @@ def run_ranking(
     low_expression_mode: str = DEFAULT_LOW_EXPRESSION_MODE,
     rna_method: str = "robust_z",
     notes_out: list[str] | None = None,
+    off_method: str = DEFAULT_OFF_METHOD,
+    off_cutoff_tpm: float | None = None,
 ) -> list[dict]:
     """
     Execute the full ranking pipeline. Returns list of ranked cell line dicts.
@@ -652,6 +677,9 @@ def run_ranking(
     Only the RNA scale changes; protein, weights and the rest of the pipeline are the same.
     notes_out: if given, plain-language notes about the result are appended to
     it (e.g. a LOW gene that does not separate the cell lines shown).
+    off_method / off_cutoff_tpm: how a gene is judged "off" in a cell line
+    (config.OFF_METHODS; default "fixed" = below 1 TPM). Off lines are flagged
+    and, for LOW genes, ranked first ("TPM below 1") or last ("TPM greater than 1").
     """
     # Per-gene scoring
     combined_per_gene: dict[str, pd.DataFrame] = {}
@@ -666,6 +694,10 @@ def run_ranking(
         raise ValueError(f"unknown low_expression_mode: {low_expression_mode!r}")
     if rna_method not in data_service.RNA_METHODS:
         raise ValueError(f"unknown rna_method: {rna_method!r}")
+    if off_method not in OFF_METHODS:
+        raise ValueError(f"unknown off_method: {off_method!r}")
+    if off_method == "custom" and off_cutoff_tpm is None:
+        raise ValueError("off_method 'custom' needs off_cutoff_tpm")
     # Geometric mean needs "higher = better" for every gene, so LOW genes are
     # inverted (1 - score). Single-gene search and summed RRF keep the old scores.
     invert_low = len(genes) > 1 and multi_gene_method == "geometric"
@@ -685,7 +717,7 @@ def run_ranking(
 
         # 1b. Expression category from raw TPM (shown for every gene). For a
         #     LOW gene it also sets the RNA score of off cell lines (priority 5).
-        categories = data_service.classify_expression(signal)
+        categories = data_service.classify_expression(signal, off_method, off_cutoff_tpm)
         categories_per_gene[gene["hugo"]] = categories
         consensus_per_gene[gene["hugo"]] = signal["consensus"]
         if gene["direction"] == "low":
@@ -960,7 +992,7 @@ def run_ranking(
     if notes_out is not None and multi_gene_method == "geometric":
         notes_out.extend(low_gene_notes(
             genes, results, candidate_ids, categories_per_gene, desirability, gm_weights,
-            low_expression_mode,
+            low_expression_mode, off_method,
         ))
 
     # GEO support for the returned cell lines (extra evidence only:

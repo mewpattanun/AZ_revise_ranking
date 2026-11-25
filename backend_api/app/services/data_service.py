@@ -6,11 +6,19 @@ hugo_symbol, etc.). DuckDB reads these as DICTIONARY type, which can cause
 ConversionErrors with parameterised queries. We CAST to VARCHAR where needed.
 """
 
+import hashlib
+from collections import OrderedDict
+
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-from app.config import EXPR_DETECTION_TPM, EXPR_MODERATE_TPM, EXPR_OFF_TPM, RRF_K
+from app.config import (
+    DEFAULT_OFF_METHOD, EXPR_DETECTION_TPM, EXPR_MODERATE_TPM, EXPR_OFF_TPM, OFF_DISTANCE_SD,
+    OFF_METHODS, OFF_MIN_GROUP_SHARE, OFF_MIN_LINES, OFF_MIN_LOG2_GAP, OFF_MIXTURE_POSTERIOR,
+    OFF_REF_FRACTION, OFF_REF_QUANTILE, OFF_STRICT_MIN_BIC_GAIN, OFF_STRICT_MIN_D,
+    OFF_STRICT_MIN_GROUP_SHARE, OFF_STRICT_POSTERIOR, RRF_K,
+)
 from app.database import query, query_df
 
 
@@ -238,11 +246,139 @@ def get_rna_consensus(
 # ── Expression categories (AZ priority 5) ─────────────────────
 
 # Ordered from "not expressed" to "expressed". "missing" = no RNA value at all.
-EXPRESSION_CATEGORIES = ("below_detection", "negligible", "low_measurable", "moderate")
-OFF_CATEGORIES = ("below_detection", "negligible")
+# low_relative = 1 TPM or more, but off for this gene under the chosen off
+# cutoff method (gene-relative; never produced by the default "fixed").
+EXPRESSION_CATEGORIES = ("below_detection", "negligible", "low_relative", "low_measurable", "moderate")
+OFF_CATEGORIES = ("below_detection", "negligible", "low_relative")
+# Below 1 TPM in every source: differences here are noise, so these lines tie
+# on RNA (and protein) in LOW searches. low_relative lines are off for their
+# gene but at >= 1 TPM, so their real TPM differences (e.g. 2 vs 20) still count.
+BELOW_1_CATEGORIES = ("below_detection", "negligible")
 
 
-def classify_expression(signal: pd.DataFrame) -> pd.DataFrame:
+# ── Off cutoff methods (gene-relative "off") ─────────────────
+
+_GROUP_FIT_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_GROUP_FIT_CACHE_SIZE = 256
+
+
+def _two_group_fit(log_level: pd.Series) -> dict:
+    """
+    Fit 1 and 2 Gaussian groups to log2(TPM + 1) of one gene across cell lines.
+    Cached by the data itself (a ranking request, and the sensitivity sweep,
+    classify the same gene several times).
+    Returns the groups (low / high mean and SD in log2 units, the smallest group
+    share), Ashman's D (how well the groups separate), the BIC gain of 2 groups
+    over 1, and P(low group) for every cell line.
+    """
+    from sklearn.mixture import GaussianMixture   # only needed for these methods
+
+    values = np.ascontiguousarray(log_level.to_numpy(dtype=float))
+    key = hashlib.sha1(values.tobytes()).hexdigest()
+    if key in _GROUP_FIT_CACHE:
+        _GROUP_FIT_CACHE.move_to_end(key)
+        fit = _GROUP_FIT_CACHE[key]
+    else:
+        x = values.reshape(-1, 1)
+        one = GaussianMixture(1, random_state=0).fit(x)
+        two = GaussianMixture(2, random_state=0).fit(x)
+        mu = two.means_.ravel()
+        sd = np.sqrt(two.covariances_.ravel())
+        hi = int(np.argmax(mu))
+        lo = 1 - hi
+        fit = {
+            "mu_lo": float(mu[lo]), "mu_hi": float(mu[hi]),
+            "sd_lo": float(sd[lo]), "sd_hi": float(sd[hi]),
+            "min_share": float(two.weights_.min()),
+            "ashman_d": float(np.sqrt(2) * abs(mu[hi] - mu[lo]) / np.sqrt(sd[0] ** 2 + sd[1] ** 2)),
+            "bic_gain": float(one.bic(x) - two.bic(x)),
+            "p_low": two.predict_proba(x)[:, lo],
+        }
+        _GROUP_FIT_CACHE[key] = fit
+        if len(_GROUP_FIT_CACHE) > _GROUP_FIT_CACHE_SIZE:
+            _GROUP_FIT_CACHE.popitem(last=False)
+    return {**fit, "p_low": pd.Series(fit["p_low"], index=log_level.index)}
+
+
+def off_by_method(
+    level: pd.Series, method: str = DEFAULT_OFF_METHOD, cutoff_tpm: float | None = None
+) -> tuple[pd.Series, str | None]:
+    """
+    Which cell lines count as off for one gene.
+
+    level: TPM per cell line (the highest source). Below EXPR_OFF_TPM a line is
+    always off; `method` (see config.OFF_METHODS) can also call a line off at
+    1 TPM or more when it is low for THIS gene.
+    Returns (bool Series "off", reason) where reason explains, in plain words,
+    why a line at >= 1 TPM was called off (None if the method added nothing).
+    Data-driven methods fall back to the fixed rule when the gene has too few
+    cell lines or no clear groups.
+    """
+    if method not in OFF_METHODS:
+        raise ValueError(f"unknown off_method: {method!r} (use one of {', '.join(OFF_METHODS)})")
+    level = level.astype(float)
+    below_1 = level < EXPR_OFF_TPM
+    if method == "fixed" or (method != "custom" and level.notna().sum() < OFF_MIN_LINES):
+        return below_1, None
+
+    if method == "custom":
+        if cutoff_tpm is None:
+            raise ValueError("off_method 'custom' needs off_cutoff_tpm")
+        cut = max(float(cutoff_tpm), EXPR_OFF_TPM)
+        return level < cut, f"below the chosen cutoff of {cut:g} TPM"
+
+    if method == "percent_of_reference":
+        expressing = level[level >= EXPR_OFF_TPM]
+        if expressing.empty:
+            return below_1, None
+        ref = float(expressing.quantile(OFF_REF_QUANTILE))
+        cut = max(OFF_REF_FRACTION * ref, EXPR_OFF_TPM)
+        return level < cut, (
+            f"below {cut:.1f} TPM = {OFF_REF_FRACTION:.0%} of this gene's reference level "
+            f"({ref:.0f} TPM, the {OFF_REF_QUANTILE * 100:.0f}th percentile of expressing lines)"
+        )
+
+    log_level = np.log2(level.clip(lower=0) + 1.0)
+    fit = _two_group_fit(log_level)
+    lo_tpm, hi_tpm = 2 ** fit["mu_lo"] - 1, 2 ** fit["mu_hi"] - 1
+    gap = fit["mu_hi"] - fit["mu_lo"]
+
+    if method in ("mixture", "distance_from_on"):
+        split = (
+            gap >= OFF_MIN_LOG2_GAP
+            and gap > max(fit["sd_lo"], fit["sd_hi"])
+            and fit["min_share"] >= OFF_MIN_GROUP_SHARE
+        )
+        if not split:
+            return below_1, None
+        if method == "mixture":
+            off = fit["p_low"] > OFF_MIXTURE_POSTERIOR
+            reason = f"in the low group of a 2-group split (about {lo_tpm:.1f} vs {hi_tpm:.0f} TPM)"
+        else:
+            z = (log_level - fit["mu_hi"]) / fit["sd_hi"]
+            off = z < -OFF_DISTANCE_SD
+            reason = (f"more than {OFF_DISTANCE_SD:g} SD below the expressing group "
+                      f"(typically {hi_tpm:.0f} TPM)")
+        return below_1 | off, reason
+
+    # strict_mixture: only genes with a clear on/off split
+    clear = (
+        fit["ashman_d"] > OFF_STRICT_MIN_D
+        and fit["bic_gain"] > OFF_STRICT_MIN_BIC_GAIN
+        and fit["min_share"] >= OFF_STRICT_MIN_GROUP_SHARE
+    )
+    if not clear:
+        return below_1, None
+    off = fit["p_low"] > OFF_STRICT_POSTERIOR
+    return below_1 | off, (
+        f"in the low group of a clear on/off split (about {lo_tpm:.1f} vs {hi_tpm:.0f} TPM, "
+        f"separation D = {fit['ashman_d']:.1f})"
+    )
+
+
+def classify_expression(
+    signal: pd.DataFrame, off_method: str = DEFAULT_OFF_METHOD, off_cutoff_tpm: float | None = None
+) -> pd.DataFrame:
     """
     Expression category per cell line from raw TPM (get_rna_consensus output).
 
@@ -250,17 +386,20 @@ def classify_expression(signal: pd.DataFrame) -> pd.DataFrame:
     counts as off when every source agrees (conservative):
       below_detection : every source below its detection limit (EXPR_DETECTION_TPM)
       negligible      : every source below EXPR_OFF_TPM (1 TPM)
+      low_relative    : 1 TPM or more, but off for this gene under `off_method`
+                        (never with the default "fixed"; see off_by_method)
       low_measurable  : highest source from 1 to 3 TPM
       moderate        : highest source above EXPR_MODERATE_TPM (3 TPM)
 
     Returns a DataFrame indexed by ach_id with columns:
       category, tpm (mean over sources), tpm_<source>,
-      sources_disagree (one source says off, another says expressed).
+      sources_disagree (one source says off, another says expressed),
+      off_reason (why a low_relative line is off, else None).
     Cell lines without any RNA value are not in the result ("missing").
     """
     tpm_cols = [c for c in signal.columns if c.startswith("tpm_")]
     if not tpm_cols:
-        return pd.DataFrame(columns=["category", "tpm", "sources_disagree"])
+        return pd.DataFrame(columns=["category", "tpm", "sources_disagree", "off_reason"])
     tpm = signal[tpm_cols].astype(float)
     have = tpm.notna()
     top = tpm.max(axis=1)
@@ -280,9 +419,18 @@ def classify_expression(signal: pd.DataFrame) -> pd.DataFrame:
         "category": category,
         "tpm": tpm.mean(axis=1),
         "sources_disagree": off.any(axis=1) & on.any(axis=1),
+        "off_reason": None,
     }, index=signal.index)
     out = pd.concat([out, tpm], axis=1)
-    return out[have.any(axis=1)]
+    out = out[have.any(axis=1)]
+
+    # Gene-relative off: lines at >= 1 TPM that the chosen method calls off.
+    if off_method != "fixed" and not out.empty:
+        method_off, reason = off_by_method(top.loc[out.index], off_method, off_cutoff_tpm)
+        relative = method_off & (top.loc[out.index] >= EXPR_OFF_TPM)
+        out.loc[relative, "category"] = "low_relative"
+        out.loc[relative, "off_reason"] = reason
+    return out
 
 
 # ── GEO support (extra evidence only, never part of the score) ──

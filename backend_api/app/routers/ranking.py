@@ -4,7 +4,7 @@ Core ranking endpoint — POST /api/rank
 
 from fastapi import APIRouter, HTTPException
 
-from app.config import EXPR_DETECTION_TPM, EXPR_MODERATE_TPM, EXPR_OFF_TPM, SCORING_VERSION
+from app.config import EXPR_DETECTION_TPM, EXPR_MODERATE_TPM, EXPR_OFF_TPM, OFF_METHOD_LABELS, SCORING_VERSION
 from app.models import RankRequest, RankResponse
 from app.services import data_service, ranking_service
 from app.services import sensitivity_service
@@ -66,6 +66,8 @@ def rank_cell_lines(req: RankRequest):
         low_expression_mode=req.low_expression_mode,
         rna_method=req.rna_method,
         notes_out=notes,
+        off_method=req.off_method,
+        off_cutoff_tpm=req.off_cutoff_tpm,
     )
 
     return RankResponse(
@@ -100,6 +102,9 @@ def rank_cell_lines(req: RankRequest):
                 "detection_tpm": EXPR_DETECTION_TPM,
                 "off_tpm": EXPR_OFF_TPM,
                 "moderate_tpm": EXPR_MODERATE_TPM,
+                "off_method": req.off_method,
+                "off_method_label": OFF_METHOD_LABELS[req.off_method],
+                "off_cutoff_tpm": req.off_cutoff_tpm if req.off_method == "custom" else None,
             },
             "sources": scoring_sources,
             "assay_type": req.assay_type,
@@ -167,6 +172,8 @@ def sensitivity_analysis(req: RankRequest):
         "assay_type": req.assay_type,
         "multi_gene_method": req.multi_gene_method,
         "low_expression_mode": req.low_expression_mode,
+        "off_method": req.off_method,
+        "off_cutoff_tpm": req.off_cutoff_tpm,
     }
 
     # 4. Run sensitivity sweep

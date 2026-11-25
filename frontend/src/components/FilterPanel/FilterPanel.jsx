@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { getDiseases, getLineages, getDiseaseLineageMapping, getSubtypes, getDiseaseLineageSubtypeMapping } from "../../api";
 import styles from "./FilterPanel.module.css";
-import { LOW_EXPRESSION_MODES } from "../../expression";
+import { LOW_EXPRESSION_MODES, OFF_METHODS } from "../../expression";
 
 const MODE_OPTIONS = ["ignore", "include", "exclude"];
 
@@ -165,6 +165,50 @@ export default function FilterPanel({ filters, onChange, hasLowGene = false }) {
             </div>
             <span className={styles.hint}>
               {LOW_EXPRESSION_MODES.find((m) => m.key === (filters.low_expression_mode || "off"))?.hint}
+            </span>
+          </div>
+        )}
+
+        {/* How "off" is decided: fixed 1 TPM or a gene-relative method */}
+        {hasLowGene && (
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="off-method">Off cutoff</label>
+            <select
+              id="off-method"
+              className={styles.select}
+              value={filters.off_method || "fixed"}
+              onChange={(e) => {
+                const method = e.target.value;
+                onChange({
+                  ...filters,
+                  off_method: method,
+                  // custom needs a value; start from 10 TPM if none was entered yet
+                  off_cutoff_tpm: method === "custom" ? (filters.off_cutoff_tpm ?? 10) : filters.off_cutoff_tpm,
+                });
+              }}
+            >
+              {OFF_METHODS.map((m) => (
+                <option key={m.key} value={m.key}>{m.label}</option>
+              ))}
+            </select>
+            {(filters.off_method || "fixed") === "custom" && (
+              <label className={styles.thresholdLabel}>
+                Off below (TPM)
+                <input
+                  type="number"
+                  className={styles.thresholdInput}
+                  min="1"
+                  step="1"
+                  value={filters.off_cutoff_tpm ?? ""}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    set("off_cutoff_tpm", Number.isFinite(v) ? Math.max(v, 1) : null);
+                  }}
+                />
+              </label>
+            )}
+            <span className={styles.hint}>
+              {OFF_METHODS.find((m) => m.key === (filters.off_method || "fixed"))?.hint}
             </span>
           </div>
         )}
